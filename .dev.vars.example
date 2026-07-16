@@ -1,0 +1,27 @@
+# Charlie Worker secrets — copy to apps/web/.dev.vars for local dev.
+# In production these are set with `wrangler secret put <NAME>`.
+
+# --- Google OIDC (Phase 1) ---
+# Create an OAuth 2.0 Web client in Google Cloud Console.
+# Authorized redirect URI: http://localhost:8787/api/auth/google/callback (dev)
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""
+
+# --- Key-encryption key (Phase 1+) ---
+# 32-byte key, base64. Generate: `openssl rand -base64 32`
+# Encrypts environment secrets / provider keys at rest (AES-GCM).
+CHARLIE_KEK=""
+
+# --- App configuration ---
+# Public origin the SPA + OIDC redirect are served from.
+APP_BASE_URL="http://localhost:8787"
+# Set to "true" to require the Secure cookie flag (production). Leave empty in local dev over http.
+COOKIE_SECURE=""
+
+# --- GitHub App (Phase 3) — not required for Phase 1 ---
+# GITHUB_APP_ID=""
+# GITHUB_APP_PRIVATE_KEY=""
+# GITHUB_WEBHOOK_SECRET=""
+
+# --- Slack (Phase 6) — not required for Phase 1 ---
+# SLACK_SIGNING_SECRET=""
