@@ -12,6 +12,9 @@ import healthRoutes from './routes/health'
 import memberRoutes from './routes/members'
 import projectRoutes from './routes/projects'
 import runRoutes from './routes/runs'
+import scheduleRoutes from './routes/schedules'
+import webhookRoutes from './routes/webhooks'
+import { sweepSchedules } from './scheduler'
 
 const app = new Hono<AppBindings>()
 
@@ -36,6 +39,7 @@ api.route('/members', memberRoutes)
 api.route('/api-keys', apiKeyRoutes)
 api.route('/projects', projectRoutes)
 api.route('/runs', runRoutes)
+api.route('/schedules', scheduleRoutes)
 // environments, flows, and machine callbacks register full subpaths, so they
 // mount at the API root.
 api.route('/', environmentRoutes)
@@ -46,6 +50,10 @@ api.route('/', callbackRoutes)
 api.all('*', (c) => errorResponse(c, new HttpError('not_found', 'Not found')))
 
 app.route('/api', api)
+
+// Inbound webhooks (GitHub on-merge triggers). Authenticated by HMAC signature,
+// not sessions — mounted outside /api.
+app.route('/webhooks', webhookRoutes)
 
 // Non-API routes are served from static assets by the runtime (run_worker_first
 // scopes the Worker to /api, /webhooks, /slack). This fallback covers any path
@@ -70,5 +78,16 @@ export default {
         message.retry()
       }
     }
+  },
+
+  // Cron Trigger: fire due cron schedules (once per tick). See scheduler.ts.
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      sweepSchedules(env)
+        .then((r) => {
+          if (r.fired.length) console.info(`[cron] fired ${r.fired.length} schedule(s)`)
+        })
+        .catch((err) => console.error('[cron] sweep failed:', err)),
+    )
   },
 }

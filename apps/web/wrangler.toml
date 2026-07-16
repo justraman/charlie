@@ -58,6 +58,10 @@ class_name = "RunCoordinator"
 tag = "v1"
 new_sqlite_classes = ["RunCoordinator"]
 
+# Cron sweep: the `scheduled` handler fires due cron schedules once a minute.
+[triggers]
+crons = ["* * * * *"]
+
 [observability]
 enabled = true
 

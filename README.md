@@ -95,7 +95,7 @@ Other confirmed decisions:
 
 ## Status
 
-In development. **Phases 0–4 are complete and verified.**
+In development. **Phases 0–5 are complete and verified.**
 
 Phase 1 — Auth, RBAC & audit:
 
@@ -130,7 +130,14 @@ Phase 4 — Load engine (k6):
 
 The **same flow definition** runs as Playwright (Phase 3) or k6 (Phase 4) with no edits.
 
-See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 5: scheduling & triggers).
+Phase 5 — Scheduling & triggers:
+
+- `schedules` (migration `0005`) with `runs.schedule_id` for per-schedule history; run creation is factored into one path (`createRun`) shared by manual, cron, and merge triggers.
+- A Cloudflare **Cron Trigger** (once a minute) runs a sweep that selects due cron schedules, claims each with a conditional D1 update (so a tick fires exactly once even across overlapping invocations), creates a run, and advances `next_due_at`; a small UTC cron parser computes due times.
+- A GitHub **webhook receiver** (`/webhooks/github`) verifies the `X-Hub-Signature-256` HMAC, then matches a `push`/merged-`pull_request` on a watched branch to `on_merge` schedules (by the project's `source_repo`), creating a run tagged with the commit and `trigger = merge`.
+- SPA: per-project schedule management — cron builder with presets, branch watcher, enable/disable, next-run display, and per-schedule run history.
+
+See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 6: Slack integration).
 
 ## Local development
 

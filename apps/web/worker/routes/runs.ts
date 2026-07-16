@@ -4,7 +4,7 @@ import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { githubConfigured } from '../lib/github'
 import { clientIp, HttpError, userAgent } from '../lib/http'
-import { uuidv7 } from '../lib/ids'
+import { createRun } from '../lib/run-create'
 import { callRunDO } from '../lib/run-do'
 import { parseBody } from '../lib/validate'
 import { authenticate, authorize } from '../middleware/auth'
@@ -15,8 +15,6 @@ const runs = new Hono<AppBindings>()
 // (bundle, shard-result, finalize, artifacts) live in callbacks.ts and use
 // run-token auth. A wildcard session-auth middleware would shadow them. Each
 // human-facing route below attaches `authenticate` explicitly.
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 interface RunRow {
   id: string
@@ -72,81 +70,6 @@ async function loadRun(db: D1Database, orgId: string, id: string): Promise<RunRo
   return row
 }
 
-// --- resolution helpers -----------------------------------------------------
-
-async function resolveProject(db: D1Database, orgId: string, ref: string) {
-  const byId = UUID_RE.test(ref)
-  const row = await db
-    .prepare(
-      `SELECT id FROM projects WHERE org_id = ? AND ${byId ? 'id' : 'slug'} = ? AND deleted_at IS NULL`,
-    )
-    .bind(orgId, ref)
-    .first<{ id: string }>()
-  if (!row) throw new HttpError('bad_request', `Unknown project: ${ref}`)
-  return row.id
-}
-
-async function resolveEnvironment(db: D1Database, projectId: string, ref: string) {
-  const byId = UUID_RE.test(ref)
-  const row = await db
-    .prepare(
-      `SELECT id FROM environments WHERE project_id = ? AND ${byId ? 'id' : 'name'} = ? AND deleted_at IS NULL`,
-    )
-    .bind(projectId, ref)
-    .first<{ id: string }>()
-  if (!row) throw new HttpError('bad_request', `Unknown environment: ${ref}`)
-  return row.id
-}
-
-interface FlowSel {
-  flowId: string
-  versionId: string
-  name: string
-}
-
-async function resolveFlows(
-  db: D1Database,
-  projectId: string,
-  engine: string,
-  names: string[] | undefined,
-): Promise<FlowSel[]> {
-  const all = !names || names.length === 0 || names.includes('all')
-  const rows = await db
-    .prepare(
-      `SELECT id, name, current_version_id, engines FROM flows
-         WHERE project_id = ? AND deleted_at IS NULL AND current_version_id IS NOT NULL`,
-    )
-    .bind(projectId)
-    .all<{ id: string; name: string; current_version_id: string; engines: string }>()
-
-  let selected = rows.results
-  if (!all) {
-    const want = new Set(names)
-    selected = rows.results.filter((r) => want.has(r.name))
-    const found = new Set(selected.map((r) => r.name))
-    const missing = [...want].filter((n) => !found.has(n))
-    if (missing.length) throw new HttpError('bad_request', `Unknown flow(s): ${missing.join(', ')}`)
-  }
-  // Only flows that declare support for the chosen engine.
-  selected = selected.filter((r) => {
-    try {
-      return (JSON.parse(r.engines) as string[]).includes(engine)
-    } catch {
-      return false
-    }
-  })
-  if (selected.length === 0) {
-    throw new HttpError('bad_request', `No flows support engine "${engine}"`)
-  }
-  return selected.map((r) => ({ flowId: r.id, versionId: r.current_version_id, name: r.name }))
-}
-
-function sizeShards(engine: string, flowCount: number): number {
-  // E2E splits flows across browser shards; k6 uses few jobs × many VUs (Phase 4).
-  if (engine === 'k6') return 1
-  return Math.max(1, flowCount)
-}
-
 const createSchema = z.object({
   project: z.string().min(1),
   environment: z.string().min(1),
@@ -165,80 +88,30 @@ runs.post(
     const actor = c.get('auth')
     const body = await parseBody(c, createSchema)
 
-    const projectId = await resolveProject(c.env.DB, actor.orgId, body.project)
-    const environmentId = await resolveEnvironment(c.env.DB, projectId, body.environment)
-    const flowSelection = await resolveFlows(c.env.DB, projectId, body.engine, body.flows)
-    const expectedShards = sizeShards(body.engine, flowSelection.length)
-
-    const runId = uuidv7()
-    const now = new Date().toISOString()
-    const trigger = actor.actorKind === 'api_key' ? 'ci' : 'manual'
-    const triggeredBy = actor.actorKind === 'user' ? actor.actorId : null
-
-    await writeAudited(
-      c.env.DB,
-      [
-        c.env.DB.prepare(
-          `INSERT INTO runs
-           (id, org_id, project_id, environment_id, flow_selection, engine, profile, status,
-            trigger, triggered_by, expected_shards, commit_sha, queued_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
-        ).bind(
-          runId,
-          actor.orgId,
-          projectId,
-          environmentId,
-          JSON.stringify(flowSelection),
-          body.engine,
-          body.profile ?? 'smoke',
-          trigger,
-          triggeredBy,
-          expectedShards,
-          body.commitSha ?? null,
-          now,
-        ),
-      ],
-      {
-        orgId: actor.orgId,
-        actorId: actor.actorId,
-        actorKind: actor.actorKind,
-        action: 'run.trigger',
-        entityType: 'run',
-        entityId: runId,
-        after: {
-          projectId,
-          environmentId,
-          engine: body.engine,
-          profile: body.profile ?? 'smoke',
-          flows: flowSelection.map((f) => f.name),
-          expectedShards,
-        },
-        ip: clientIp(c),
-        userAgent: userAgent(c),
-      },
-    )
-
-    // Initialize the Coordinator DO before dispatch so callbacks always land.
-    await callRunDO(c.env, runId, '/init', {
-      body: {
-        runId,
-        orgId: actor.orgId,
-        engine: body.engine,
-        expectedShards,
-        flowSelection,
-      },
+    // API-key callers are CI; human sessions are manual triggers.
+    const result = await createRun(c.env, {
+      orgId: actor.orgId,
+      project: body.project,
+      environment: body.environment,
+      engine: body.engine,
+      profile: body.profile,
+      flows: body.flows,
+      trigger: actor.actorKind === 'api_key' ? 'ci' : 'manual',
+      triggeredBy: actor.actorKind === 'user' ? actor.actorId : null,
+      commitSha: body.commitSha,
+      actorId: actor.actorId,
+      actorKind: actor.actorKind,
+      ip: clientIp(c),
+      userAgent: userAgent(c),
     })
-
-    // Enqueue dispatch (decoupled from the request).
-    await c.env.RUNS_QUEUE.send({ runId, orgId: actor.orgId })
 
     return c.json(
       {
-        runId,
-        status: 'queued',
-        engine: body.engine,
-        expectedShards,
-        dispatch: githubConfigured(c.env) ? 'queued' : 'skipped-no-github',
+        runId: result.runId,
+        status: result.status,
+        engine: result.engine,
+        expectedShards: result.expectedShards,
+        dispatch: result.dispatch,
       },
       202,
     )
