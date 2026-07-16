@@ -24,17 +24,19 @@ jobs:
       - name: Generate Worker types
         run: bun run --cwd apps/web cf-typegen
 
+      # Nx runs typecheck/test/build across projects with caching. On a PR you
+      # can scope to changed projects with `bunx nx affected -t typecheck test build`.
       - name: Typecheck
-        run: bun run typecheck
+        run: bunx nx run-many -t typecheck
 
       - name: Unit tests
-        run: bun test
+        run: bunx nx run-many -t test
 
       - name: D1 migration check (local apply)
         run: bun run --cwd apps/web db:migrate:local
 
       - name: Build SPA
-        run: bun run build
+        run: bunx nx run @charlie/web:build
 
       - name: Wrangler deploy dry-run
         run: bun run --cwd apps/web deploy:dry

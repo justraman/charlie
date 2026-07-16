@@ -61,7 +61,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
 | Auth | Google SSO (OIDC) |
 | AI | Pluggable provider (Anthropic Claude / OpenAI / Cloudflare Workers AI) |
 | Integrations | Slack app, GitHub App |
-| Language / tooling | TypeScript, Bun or npm, Biome, Wrangler |
+| Language / tooling | TypeScript, Bun, Nx (monorepo task runner), Biome, Wrangler |
 
 ---
 
@@ -125,7 +125,7 @@ See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 4: the k6 load
 
 ## Local development
 
-Requires [Bun](https://bun.sh) and the Cloudflare Wrangler CLI (installed as a dev dependency).
+Requires [Bun](https://bun.sh); the Wrangler CLI and [Nx](https://nx.dev) come in as dev dependencies. Charlie is a **Bun-workspaces monorepo** (`apps/web`, `packages/flow-core`, `packages/runner`) with **Nx** as the task runner — Nx caches `typecheck`/`test`/`build` per project and can scope work to what changed (`nx affected`). Bun stays the installer and runtime; Biome stays the linter/formatter (run repo-wide, not per project).
 
 ```bash
 bun install
@@ -146,9 +146,15 @@ bun run dev
 Set `ALLOWED_EMAIL_DOMAINS` in `apps/web/wrangler.toml` (or via `--var`) so the first Google login can bootstrap the organization. Useful checks:
 
 ```bash
-bun test          # unit suite (OIDC verification, crypto, RBAC, audit redaction)
-bun run typecheck # worker + SPA
-bun run lint      # Biome
+bun run typecheck   # nx run-many -t typecheck (cached, all projects)
+bun run test        # nx run-many -t test (cached)
+bun run build       # nx run @charlie/web:build
+bun run affected    # only what changed vs main
+bun run graph       # interactive project graph
+bun run lint        # Biome (repo-wide)
+
+# Run a single project's target directly:
+bunx nx run @charlie/flow-core:test
 ```
 
 ## License

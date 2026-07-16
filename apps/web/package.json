@@ -12,6 +12,7 @@
     "deploy": "vite build && wrangler deploy",
     "deploy:dry": "wrangler deploy --dry-run",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.worker.json",
+    "test": "bun test",
     "cf-typegen": "wrangler types",
     "db:migrate:local": "wrangler d1 migrations apply charlie-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply charlie-db --remote"

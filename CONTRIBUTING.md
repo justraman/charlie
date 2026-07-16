@@ -17,16 +17,31 @@ These are load-bearing and reviewed on every PR:
 - **Docs-as-you-go.** Update the relevant `docs/*` file in the same PR as the feature.
 - **Secrets never round-trip.** Environment secrets and provider keys are write-only from the client's perspective — the API returns presence/masked hints, never plaintext.
 
+## Monorepo & tasks (Nx)
+
+Charlie is a Bun-workspaces monorepo with [Nx](https://nx.dev) as the task runner (package-based — Nx wraps each project's package.json scripts, Bun installs). `typecheck`, `test`, and `build` are cached per project.
+
+```bash
+bun run typecheck            # nx run-many -t typecheck (all projects, cached)
+bun run test                 # nx run-many -t test
+bunx nx run @charlie/web:build
+bunx nx run @charlie/flow-core:test   # one project's target
+bun run affected             # only projects affected vs main
+bun run graph                # project graph
+```
+
+Lint/format is Biome, run repo-wide (not through Nx): `bun run lint`, `bun run format`.
+
 ## Before you open a PR
 
 ```bash
 bun run lint
 bun run typecheck
-bun test
+bun run test
 bun run build
 ```
 
-CI runs the same checks plus a `wrangler deploy --dry-run` and a local D1 migration apply.
+CI runs the same checks (via `nx run-many`) plus a `wrangler deploy --dry-run` and a local D1 migration apply.
 
 ## Commit / PR style
 
