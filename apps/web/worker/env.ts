@@ -25,6 +25,9 @@ export interface Env {
   // Dead-shard timeout (ms) the Run Coordinator uses before closing a stalled
   // run. Optional; defaults to 10 minutes. Lowered in tests.
   DEAD_SHARD_TIMEOUT_MS?: string
+  // Slack Web API base URL. Defaults to https://slack.com/api; overridden only
+  // in local/dev to point at a mock. Never set in production.
+  SLACK_API_BASE?: string
 
   // Secrets (.dev.vars locally / `wrangler secret put` in prod)
   GOOGLE_CLIENT_ID?: string

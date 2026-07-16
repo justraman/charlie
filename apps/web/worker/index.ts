@@ -9,10 +9,12 @@ import callbackRoutes from './routes/callbacks'
 import environmentRoutes from './routes/environments'
 import flowRoutes from './routes/flows'
 import healthRoutes from './routes/health'
+import integrationRoutes from './routes/integrations'
 import memberRoutes from './routes/members'
 import projectRoutes from './routes/projects'
 import runRoutes from './routes/runs'
 import scheduleRoutes from './routes/schedules'
+import slackRoutes from './routes/slack'
 import webhookRoutes from './routes/webhooks'
 import { sweepSchedules } from './scheduler'
 
@@ -40,6 +42,7 @@ api.route('/api-keys', apiKeyRoutes)
 api.route('/projects', projectRoutes)
 api.route('/runs', runRoutes)
 api.route('/schedules', scheduleRoutes)
+api.route('/integrations', integrationRoutes)
 // environments, flows, and machine callbacks register full subpaths, so they
 // mount at the API root.
 api.route('/', environmentRoutes)
@@ -54,6 +57,10 @@ app.route('/api', api)
 // Inbound webhooks (GitHub on-merge triggers). Authenticated by HMAC signature,
 // not sessions — mounted outside /api.
 app.route('/webhooks', webhookRoutes)
+
+// Slack slash command + interactivity. Authenticated by the Slack request
+// signature — mounted outside /api.
+app.route('/slack', slackRoutes)
 
 // Non-API routes are served from static assets by the runtime (run_worker_first
 // scopes the Worker to /api, /webhooks, /slack). This fallback covers any path

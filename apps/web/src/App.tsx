@@ -6,6 +6,7 @@ import { AppHeader } from '@/components/AppHeader'
 import { DashboardView } from '@/views/DashboardView'
 import { FlowEditorView } from '@/views/FlowEditorView'
 import { FlowHistoryView } from '@/views/FlowHistoryView'
+import { IntegrationsView } from '@/views/IntegrationsView'
 import { LoginView } from '@/views/LoginView'
 import { MembersView } from '@/views/MembersView'
 import { ProjectDetailView } from '@/views/ProjectDetailView'
@@ -64,6 +65,14 @@ export function App() {
           element={
             <RequireAuth cap="members.manage">
               <MembersView />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/integrations"
+          element={
+            <RequireAuth cap="integrations.manage">
+              <IntegrationsView />
             </RequireAuth>
           }
         />

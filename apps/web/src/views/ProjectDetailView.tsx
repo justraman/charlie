@@ -13,6 +13,7 @@ interface Project {
   slug: string
   description: string | null
   sourceRepo: string | null
+  slackChannel: string | null
 }
 interface Flow {
   id: string
@@ -28,6 +29,7 @@ export function ProjectDetailView() {
   const [project, setProject] = useState<Project | null>(null)
   const [flows, setFlows] = useState<Flow[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [channel, setChannel] = useState('')
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -38,11 +40,22 @@ export function ProjectDetailView() {
         api.get<{ flows: Flow[] }>(`/api/projects/${projectId}/flows`),
       ])
       setProject(p.project)
+      setChannel(p.project.slackChannel ?? '')
       setFlows(f.flows)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err))
     }
   }, [projectId])
+
+  async function saveChannel() {
+    if (!projectId) return
+    try {
+      await api.patch(`/api/projects/${projectId}`, { slackChannel: channel || null })
+      await load()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
+    }
+  }
 
   useEffect(() => {
     void load()
@@ -126,6 +139,20 @@ export function ProjectDetailView() {
             <div className={styles.head}>
               <h2>Schedules</h2>
             </div>
+            {can('flows.write') && (
+              <p className="muted" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <span>Default Slack channel for scheduled/merge reports:</span>
+                <input
+                  value={channel}
+                  onChange={(e) => setChannel(e.target.value)}
+                  placeholder="#qa-runs or channel ID"
+                  style={{ padding: '0.3rem 0.5rem' }}
+                />
+                <button type="button" className="btn" onClick={saveChannel}>
+                  Save
+                </button>
+              </p>
+            )}
             {projectId && <SchedulesPanel projectId={projectId} />}
           </section>
 

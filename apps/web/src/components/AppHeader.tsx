@@ -40,6 +40,11 @@ export function AppHeader() {
               Members
             </NavLink>
           )}
+          {can('integrations.manage') && (
+            <NavLink to="/integrations" className={navClass}>
+              Integrations
+            </NavLink>
+          )}
         </nav>
         {user && (
           <div className={styles.who}>

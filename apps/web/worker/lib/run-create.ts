@@ -115,6 +115,8 @@ export interface CreateRunParams {
   triggeredBy?: string | null
   commitSha?: string | null
   scheduleId?: string | null
+  /** Slack channel to report the terminal result to (slash-command runs). */
+  slackChannel?: string | null
   /** Audit attribution. */
   actorId: string | null
   actorKind: ActorKind
@@ -153,8 +155,8 @@ export async function createRun(env: Env, params: CreateRunParams): Promise<Crea
         .prepare(
           `INSERT INTO runs
            (id, org_id, project_id, environment_id, flow_selection, engine, profile, status,
-            trigger, triggered_by, expected_shards, commit_sha, schedule_id, queued_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+            trigger, triggered_by, expected_shards, commit_sha, schedule_id, slack_channel, queued_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           runId,
@@ -169,6 +171,7 @@ export async function createRun(env: Env, params: CreateRunParams): Promise<Crea
           expectedShards,
           params.commitSha ?? null,
           params.scheduleId ?? null,
+          params.slackChannel ?? null,
           now,
         ),
     ],

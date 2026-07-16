@@ -1,0 +1,36 @@
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+.connected {
+  color: var(--success);
+  font-size: 13px;
+}
+.notice {
+  color: var(--success);
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 460px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 13px;
+}
+.field input {
+  padding: 0.45rem 0.6rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+}
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}

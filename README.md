@@ -95,7 +95,7 @@ Other confirmed decisions:
 
 ## Status
 
-In development. **Phases 0–5 are complete and verified.**
+In development. **Phases 0–6 are complete and verified.**
 
 Phase 1 — Auth, RBAC & audit:
 
@@ -137,7 +137,15 @@ Phase 5 — Scheduling & triggers:
 - A GitHub **webhook receiver** (`/webhooks/github`) verifies the `X-Hub-Signature-256` HMAC, then matches a `push`/merged-`pull_request` on a watched branch to `on_merge` schedules (by the project's `source_repo`), creating a run tagged with the commit and `trigger = merge`.
 - SPA: per-project schedule management — cron builder with presets, branch watcher, enable/disable, next-run display, and per-schedule run history.
 
-See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 6: Slack integration).
+Phase 6 — Slack integration:
+
+- `integrations` (migration `0006`) storing the single-workspace Slack app's bot token + signing secret AES-GCM encrypted at rest (never returned to a client); `runs.slack_channel` + a per-project default channel as report targets.
+- `/slack/command`: verifies the Slack request (5-minute replay window + `v0` HMAC), **acks within 3s**, then does the work asynchronously — maps the Slack user to a Charlie user by verified email, gates on the same `runs.trigger` capability as the web app (refusing + auditing otherwise), and creates a `trigger = slack` run — replying via `response_url`. `/slack/interactivity` handles the **Re-run** button.
+- Command grammar `run`/`e2e`/`load`/`status`/`last`/`help`.
+- Post-run reporter: the Run Coordinator posts a Block Kit pass/fail message (flows passed, or load percentiles + breached threshold) with **View report** and **Re-run** buttons to the originating channel, and scheduled/merge runs report to the project's default channel.
+- SPA: an Integrations settings page (connect/disconnect Slack) and a per-project default report channel.
+
+See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 7: AI-assisted flow generation).
 
 ## Local development
 

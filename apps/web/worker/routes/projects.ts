@@ -19,6 +19,7 @@ interface ProjectRow {
   description: string | null
   source_repo: string | null
   default_environment_id: string | null
+  slack_channel: string | null
   created_by: string
   created_at: string
   updated_at: string
@@ -32,6 +33,7 @@ function toDto(row: ProjectRow) {
     description: row.description,
     sourceRepo: row.source_repo,
     defaultEnvironmentId: row.default_environment_id,
+    slackChannel: row.slack_channel,
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -39,7 +41,7 @@ function toDto(row: ProjectRow) {
 }
 
 const PROJECT_COLS =
-  'id, name, slug, description, source_repo, default_environment_id, created_by, created_at, updated_at'
+  'id, name, slug, description, source_repo, default_environment_id, slack_channel, created_by, created_at, updated_at'
 
 async function loadProject(db: D1Database, orgId: string, id: string): Promise<ProjectRow> {
   const row = await db
@@ -149,6 +151,7 @@ const patchSchema = z
       .regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"')
       .nullish(),
     defaultEnvironmentId: z.string().nullish(),
+    slackChannel: z.string().max(80).nullish(),
   })
   .refine((b) => Object.keys(b).length > 0, { message: 'no fields to update' })
 
@@ -182,6 +185,7 @@ projects.patch('/:id', authorize({ capability: 'flows.write' }), async (c) => {
       body.defaultEnvironmentId === undefined
         ? before.default_environment_id
         : body.defaultEnvironmentId,
+    slack_channel: body.slackChannel === undefined ? before.slack_channel : body.slackChannel,
   }
 
   await writeAudited(
@@ -189,9 +193,17 @@ projects.patch('/:id', authorize({ capability: 'flows.write' }), async (c) => {
     [
       c.env.DB.prepare(
         `UPDATE projects SET name = ?, description = ?, source_repo = ?,
-                             default_environment_id = ?, updated_at = ?
+                             default_environment_id = ?, slack_channel = ?, updated_at = ?
            WHERE id = ?`,
-      ).bind(next.name, next.description, next.source_repo, next.default_environment_id, now, id),
+      ).bind(
+        next.name,
+        next.description,
+        next.source_repo,
+        next.default_environment_id,
+        next.slack_channel,
+        now,
+        id,
+      ),
     ],
     {
       orgId: actor.orgId,

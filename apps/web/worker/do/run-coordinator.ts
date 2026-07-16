@@ -7,6 +7,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { Env } from '../env'
 import { uuidv7 } from '../lib/ids'
+import { getIntegrationConfig } from '../lib/integrations'
 import type {
   FlowResultEntry,
   RunInit,
@@ -15,6 +16,7 @@ import type {
   ShardResultPayload,
   ShardStatus,
 } from '../lib/run-types'
+import { buildResultBlocks, postMessage } from '../lib/slack'
 
 const DEFAULT_DEAD_SHARD_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -366,6 +368,95 @@ export class RunCoordinator extends DurableObject<Env> {
     await this.ctx.storage.deleteAlarm()
     this.broadcast({ type: 'run-status', status, terminal: true })
     this.closeSessions()
+    // Post-run Slack report (best-effort, off the critical path).
+    if (status === 'passed' || status === 'failed') {
+      this.ctx.waitUntil(
+        this.notifySlack(meta, status).catch((err) =>
+          console.error(`[slack] report failed for run ${meta.runId}:`, err),
+        ),
+      )
+    }
+  }
+
+  /**
+   * Post a Block Kit result message to the run's Slack channel (the channel a
+   * slash command came from, else the project's default channel). No-ops cleanly
+   * when Slack isn't connected or no channel applies.
+   */
+  private async notifySlack(meta: Meta, status: RunStatus): Promise<void> {
+    const run = await this.env.DB.prepare(
+      `SELECT r.slack_channel, r.engine, r.profile, r.summary, r.error,
+              p.name AS project_name, p.slack_channel AS project_channel,
+              e.name AS env_name
+         FROM runs r
+         JOIN projects p ON p.id = r.project_id
+         JOIN environments e ON e.id = r.environment_id
+        WHERE r.id = ?`,
+    )
+      .bind(meta.runId)
+      .first<{
+        slack_channel: string | null
+        engine: string
+        profile: string
+        summary: string | null
+        error: string | null
+        project_name: string
+        project_channel: string | null
+        env_name: string
+      }>()
+    if (!run) return
+
+    const channel = run.slack_channel ?? run.project_channel
+    if (!channel) return // nothing subscribed to this run
+
+    const config = await getIntegrationConfig(this.env, meta.orgId, 'slack')
+    if (!config?.botToken) return // Slack not connected
+
+    let summary: Record<string, unknown> = {}
+    try {
+      summary = run.summary ? (JSON.parse(run.summary) as Record<string, unknown>) : {}
+    } catch {
+      /* ignore malformed */
+    }
+
+    let e2eLine: string | null = null
+    const loadLines: string[] = []
+    if (run.engine === 'k6') {
+      const p95 = summary.p95 as number | null
+      const errorRate = summary.errorRate as number | null
+      if (typeof p95 === 'number') loadLines.push(`p95 ${Math.round(p95)}ms`)
+      if (typeof errorRate === 'number')
+        loadLines.push(`error rate ${(errorRate * 100).toFixed(2)}%`)
+      const thresholds = (summary.thresholds ?? []) as { metric: string; ok: boolean }[]
+      const breached = thresholds.filter((t) => !t.ok).map((t) => t.metric)
+      if (breached.length) loadLines.push(`Failing threshold: ${breached.join(', ')}`)
+    } else {
+      const passed = (summary.flowsPassed as number | undefined) ?? 0
+      const failed = (summary.flowsFailed as number | undefined) ?? 0
+      e2eLine = `${passed}/${passed + failed} flows passed`
+      if (summary.firstFailingFlow) e2eLine += ` · first failure: ${summary.firstFailingFlow}`
+    }
+
+    const blocks = buildResultBlocks({
+      runId: meta.runId,
+      project: run.project_name,
+      environment: run.env_name,
+      engine: run.engine,
+      profile: run.profile,
+      status,
+      appBaseUrl: this.env.APP_BASE_URL,
+      e2eLine,
+      loadLines,
+      reason: run.error,
+    })
+    const icon = status === 'passed' ? '✅' : '❌'
+    await postMessage(
+      config.botToken,
+      channel,
+      blocks,
+      `${icon} ${run.project_name} · ${run.env_name} — ${status}`,
+      this.env.SLACK_API_BASE,
+    )
   }
 
   private async snapshot(): Promise<RunSnapshot | { runId: null }> {
