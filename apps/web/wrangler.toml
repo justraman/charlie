@@ -4,6 +4,12 @@ compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
+# The monorepo no longer uses Bun workspaces, so the Worker's esbuild bundle
+# can't resolve @charlie/flow-core via node_modules. Alias it to source (path
+# is relative to this config file). Mirrors the tsconfig `paths` entry.
+[alias]
+"@charlie/flow-core" = "../../packages/flow-core/src/index.ts"
+
 # Built React SPA is served as static assets; unmatched routes fall back to
 # index.html (client-side routing). The Worker handles /api, /webhooks, /slack.
 [assets]

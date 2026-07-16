@@ -61,7 +61,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
 | Auth | Google SSO (OIDC) |
 | AI | Pluggable provider (Anthropic Claude / OpenAI / Cloudflare Workers AI) |
 | Integrations | Slack app, GitHub App |
-| Language / tooling | TypeScript, Bun, Nx (monorepo task runner), Biome, Wrangler |
+| Language / tooling | TypeScript, Bun (install/runtime), Nx (monorepo), Biome, Wrangler |
 
 ---
 
@@ -125,7 +125,7 @@ See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 4: the k6 load
 
 ## Local development
 
-Requires [Bun](https://bun.sh); the Wrangler CLI and [Nx](https://nx.dev) come in as dev dependencies. Charlie is a **Bun-workspaces monorepo** (`apps/web`, `packages/flow-core`, `packages/runner`) with **Nx** as the task runner — Nx caches `typecheck`/`test`/`build` per project and can scope work to what changed (`nx affected`). Bun stays the installer and runtime; Biome stays the linter/formatter (run repo-wide, not per project).
+Requires [Bun](https://bun.sh); the Wrangler CLI and [Nx](https://nx.dev) come in as dev dependencies. Charlie is an **Nx-managed monorepo** (`apps/web`, `packages/flow-core`, `packages/runner`): a **single root `package.json`** holds all dependencies, each project is defined by a `project.json`, and Nx runs/caches `typecheck`/`test`/`build` per project (`nx affected` scopes to what changed). Bun is the installer and runtime (no workspaces); the one cross-package import, `@charlie/flow-core`, resolves from source via TypeScript path mappings (for `tsc` and Bun) plus a wrangler/esbuild alias (for the Worker bundle). Biome is the linter/formatter, run repo-wide.
 
 ```bash
 bun install

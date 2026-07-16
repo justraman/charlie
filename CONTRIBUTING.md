@@ -19,7 +19,7 @@ These are load-bearing and reviewed on every PR:
 
 ## Monorepo & tasks (Nx)
 
-Charlie is a Bun-workspaces monorepo with [Nx](https://nx.dev) as the task runner (package-based — Nx wraps each project's package.json scripts, Bun installs). `typecheck`, `test`, and `build` are cached per project.
+Charlie is an [Nx](https://nx.dev)-managed monorepo: one root `package.json` with all dependencies, each project defined by a `project.json`, Bun as installer/runtime (no workspaces). `typecheck`, `test`, and `build` are cached per project. The one cross-package import, `@charlie/flow-core`, resolves from source via TS path mappings (`tsconfig`) and a wrangler/esbuild alias for the Worker — so adding a new local dependency means wiring those aliases, not a `workspace:*` entry.
 
 ```bash
 bun run typecheck            # nx run-many -t typecheck (all projects, cached)

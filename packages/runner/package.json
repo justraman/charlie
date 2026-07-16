@@ -9,9 +9,5 @@
   "scripts": {
     "charlie": "bun run src/cli.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
-  },
-  "dependencies": {
-    "@charlie/flow-core": "workspace:*",
-    "playwright-core": "^1.61.1"
   }
 }

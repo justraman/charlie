@@ -6,7 +6,11 @@
     "noEmit": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "@charlie/flow-core": ["../../packages/flow-core/src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts"]
 }

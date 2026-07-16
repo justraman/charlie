@@ -1,4 +1,4 @@
 {
-  "files": [],
-  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.worker.json" }]
+  "//": "SPA and Worker are typechecked separately (different lib/types) via `tsc --noEmit -p tsconfig.app.json` and `-p tsconfig.worker.json` — see the `typecheck` script. This file is a placeholder so editors find a root config.",
+  "files": []
 }

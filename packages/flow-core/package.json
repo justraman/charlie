@@ -9,8 +9,5 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test"
-  },
-  "dependencies": {
-    "zod": "^4.4.3"
   }
 }

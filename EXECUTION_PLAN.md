@@ -21,7 +21,7 @@ Estimates assume a small team (1–2 engineers). They are planning aids, not com
 **Goal:** a deployable Worker serving an empty SPA, D1 wired, CI green, and the repo scaffolded as a monorepo.
 
 **Tasks**
-- Monorepo layout: `apps/web` (React SPA + Worker), `packages/flow-core`, `packages/runner` (GHA CLI), `migrations/`, `docs/` — Bun workspaces with **Nx** (package-based) as the task runner.
+- Monorepo layout: `apps/web` (React SPA + Worker), `packages/flow-core`, `packages/runner` (GHA CLI), `migrations/`, `docs/` — an **Nx-managed** monorepo (single root `package.json`, projects via `project.json`; Bun installs/runs, no workspaces).
 - Tooling: TypeScript, Nx (cached `typecheck`/`test`/`build`, affected graph), Biome (lint/format), Wrangler config (`wrangler.toml`) with bindings for D1, R2, Queues, KV, Durable Objects, Cron.
 - D1: create database, first migration (`0001_init.sql`) with `organization`, `users`, `sessions`.
 - Hono Worker skeleton: `/api/health`, static asset serving, one `/api/auth/me` stub.
@@ -235,7 +235,7 @@ These were decided to keep the plan concrete; each is cheap to revisit:
 
 - **Frontend:** React 19 + Vite SPA (react-router, CSS Modules), served by the Worker.
 - **License:** Apache-2.0 (patent grant; friendly for a tool others deploy). MIT if you want maximum permissiveness.
-- **Runtime/tooling:** Bun for install/runtime and the runner CLI; Nx (package-based) orchestrates and caches `typecheck`/`test`/`build` across projects; Wrangler for the Worker; Biome for lint/format.
+- **Runtime/tooling:** Bun for install/runtime and the runner CLI; Nx (integrated — single root `package.json`, projects via `project.json`) orchestrates and caches `typecheck`/`test`/`build`; Wrangler for the Worker; Biome for lint/format. Cross-package imports resolve from source via TS path mappings + a wrangler/esbuild alias.
 - **Artifact retention:** R2 objects expire after 30 days by default (configurable); D1 reports kept indefinitely.
 - **Run token TTL:** expires on terminal status or after 6 hours, whichever first.
 - **Default AI provider:** none preconfigured; an admin must add a key before AI features unlock.

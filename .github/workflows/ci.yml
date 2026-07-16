@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Nx auto-disables its daemon in CI; set it explicitly for constrained runners.
+    env:
+      NX_DAEMON: "false"
     steps:
       - uses: actions/checkout@v4
 
