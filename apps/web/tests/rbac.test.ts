@@ -18,12 +18,18 @@ describe('role → capability matrix', () => {
     expect(roleHasCapability('editor', 'apikeys.manage')).toBe(false)
   })
 
-  test('admin can manage secrets, members, integrations, api keys', () => {
+  test('admin can manage secrets, members, integrations, api keys, delete projects', () => {
     expect(roleHasCapability('admin', 'secrets.manage')).toBe(true)
     expect(roleHasCapability('admin', 'members.manage')).toBe(true)
     expect(roleHasCapability('admin', 'integrations.manage')).toBe(true)
     expect(roleHasCapability('admin', 'apikeys.manage')).toBe(true)
+    expect(roleHasCapability('admin', 'projects.delete')).toBe(true)
     expect(roleHasCapability('admin', 'org.admin')).toBe(false)
+  })
+
+  test('editor can author content but not delete projects', () => {
+    expect(roleHasCapability('editor', 'flows.write')).toBe(true)
+    expect(roleHasCapability('editor', 'projects.delete')).toBe(false)
   })
 
   test('owner has every capability including org.admin', () => {

@@ -1,5 +1,5 @@
 import { fileURLToPath, URL } from 'node:url'
-import vue from '@vitejs/plugin-vue'
+import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
 // The Worker (wrangler dev, :8787) is the single origin in production and the
@@ -9,7 +9,7 @@ import { defineConfig } from 'vite'
 const WORKER_ORIGIN = 'http://localhost:8787'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [react()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

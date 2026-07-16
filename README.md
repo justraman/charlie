@@ -54,7 +54,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
 | Control plane | Cloudflare Workers (Hono), Durable Objects, Queues, Cron Triggers |
 | Database | Cloudflare D1 (SQLite) |
 | Artifact storage | Cloudflare R2 |
-| Frontend | Vue 3 + Vite SPA, served by the Worker |
+| Frontend | React + Vite SPA, served by the Worker |
 | Compute | GitHub Actions (GitHub-hosted runners) |
 | E2E engine | Playwright |
 | Load engine | k6 (protocol-level HTTP) |
@@ -95,16 +95,25 @@ Other confirmed decisions:
 
 ## Status
 
-In development. **Phase 1 (Auth, RBAC & audit)** is complete on top of the Phase 0 walking skeleton:
+In development. **Phases 0–2 are complete and verified.**
 
-- Cloudflare Worker (Hono) serving the Vue SPA and a `/api` surface, D1 as the system of record.
+Phase 1 — Auth, RBAC & audit:
+
+- Cloudflare Worker (Hono) serving the React SPA and a `/api` surface, D1 as the system of record.
 - Google OIDC login with PKCE + `state`, ID-token verification, and a domain gate; first user becomes `owner`.
 - Session cookies (hash stored in D1), the single authenticate → authorize → rate-limit middleware, and the role→capability RBAC matrix.
 - Machine auth via scoped, hashed API keys.
 - An append-only audit log written in the same D1 transaction as every mutation, with secret redaction.
 - Members and API-key management (UI + API).
 
-See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (projects, flows, and the execution plane).
+Phase 2 — Projects, environments & flow authoring:
+
+- Projects, environments, flows, and immutable `flow_versions` (migration `0003`).
+- CRUD APIs for all three, every mutation audited; environment secrets AES-GCM encrypted at rest and returned only masked.
+- `@charlie/flow-core`: the Zod `FlowStep` schema, `{{secrets.*}}`/`{{vars.*}}` placeholder resolution, the engine-agnostic step executor + `actionRegistry`, and version diffing.
+- SPA: project list/detail, environment editor with masked secrets, a step-based flow editor (add/edit/reorder), and flow version history with per-version diffs.
+
+See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 3: the control/compute handshake).
 
 ## Local development
 

@@ -16,7 +16,7 @@ This split is the single most important thing to understand. Every feature decis
 ### Worker (Hono)
 A single Worker serves both the SPA and the REST API, mirroring the "one origin" model:
 
-- Static assets (the built Vue SPA) via [Workers Assets](https://developers.cloudflare.com/workers/static-assets/).
+- Static assets (the built React SPA) via [Workers Assets](https://developers.cloudflare.com/workers/static-assets/).
 - REST API mounted under `/api/*` using Hono.
 - Google OAuth callback and session management.
 - Webhook receivers for GitHub (`/webhooks/github`) and Slack (`/slack/*`).

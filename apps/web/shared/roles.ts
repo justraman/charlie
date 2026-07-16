@@ -14,8 +14,11 @@ export function isRole(value: unknown): value is Role {
 export const CAPABILITIES = [
   'projects.view',
   'runs.trigger',
+  // Editor-level content authoring: create/edit projects, environments, flows.
   'flows.write',
   'schedules.manage',
+  // Destructive: soft-deleting a project or environment (admin+).
+  'projects.delete',
   'secrets.manage',
   'integrations.manage',
   'members.manage',
@@ -30,6 +33,7 @@ const VIEWER: Capability[] = ['projects.view']
 const EDITOR: Capability[] = [...VIEWER, 'runs.trigger', 'flows.write', 'schedules.manage']
 const ADMIN: Capability[] = [
   ...EDITOR,
+  'projects.delete',
   'secrets.manage',
   'integrations.manage',
   'members.manage',

@@ -30,7 +30,7 @@ interface OAuthState {
 
 /** Only allow same-site relative redirect targets (no protocol-relative //). */
 function safeRedirect(raw: string | undefined): string {
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) return '/'
+  if (!raw?.startsWith('/') || raw.startsWith('//')) return '/'
   return raw
 }
 

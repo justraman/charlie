@@ -11,24 +11,27 @@
     "preview": "wrangler dev",
     "deploy": "vite build && wrangler deploy",
     "deploy:dry": "wrangler deploy --dry-run",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.worker.json",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.worker.json",
     "cf-typegen": "wrangler types",
     "db:migrate:local": "wrangler d1 migrations apply charlie-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply charlie-db --remote"
   },
   "dependencies": {
+    "@charlie/flow-core": "workspace:*",
     "hono": "^4.12.30",
     "jose": "^6.2.3",
-    "vue": "^3.5.40",
-    "vue-router": "^4.6.4",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router-dom": "^7.18.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260716.1",
-    "@vitejs/plugin-vue": "^6.0.8",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
     "concurrently": "^9.1.2",
     "vite": "^8.1.5",
-    "vue-tsc": "^2.2.0",
     "wrangler": "^4.111.0"
   }
 }

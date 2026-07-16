@@ -1,0 +1,22 @@
+.back {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+}
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.flows {
+  margin-top: 2rem;
+}
+.badge {
+  margin-right: 0.3rem;
+}
+.tiny {
+  padding: 0.25rem 0.6rem;
+  margin-left: 0.3rem;
+}
+.right {
+  text-align: right;
+}

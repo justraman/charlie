@@ -1,0 +1,30 @@
+.wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+.card {
+  width: 360px;
+  max-width: 100%;
+  text-align: center;
+  padding: 2.5rem 2rem;
+}
+.logo {
+  font-size: 2.5rem;
+}
+.title {
+  margin: 0.5rem 0 0.25rem;
+}
+.google {
+  display: block;
+  margin-top: 1.5rem;
+  text-align: center;
+}
+.google:hover {
+  text-decoration: none;
+}
+.fine {
+  margin-top: 1rem;
+  font-size: 12px;
+}
