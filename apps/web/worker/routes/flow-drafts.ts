@@ -5,7 +5,10 @@
 // require before a draft can ever run or be scheduled.
 
 import { type FlowBody, summarizeFlowDiff } from '@charlie/flow-core'
+import { and, desc, eq, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
+import { createDb, type Db } from '../db/client'
+import { flow_drafts, flow_versions, flows } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { clientIp, HttpError, userAgent } from '../lib/http'
@@ -51,14 +54,30 @@ function draftDto(row: DraftRow) {
   }
 }
 
-const DRAFT_COLS =
-  'id, org_id, project_id, analysis_id, name, description, engines, steps, load_profile, reasoning, source_refs, status, origin, approved_flow_id, created_at'
+const DRAFT_COLS = {
+  id: flow_drafts.id,
+  org_id: flow_drafts.org_id,
+  project_id: flow_drafts.project_id,
+  analysis_id: flow_drafts.analysis_id,
+  name: flow_drafts.name,
+  description: flow_drafts.description,
+  engines: flow_drafts.engines,
+  steps: flow_drafts.steps,
+  load_profile: flow_drafts.load_profile,
+  reasoning: flow_drafts.reasoning,
+  source_refs: flow_drafts.source_refs,
+  status: flow_drafts.status,
+  origin: flow_drafts.origin,
+  approved_flow_id: flow_drafts.approved_flow_id,
+  created_at: flow_drafts.created_at,
+}
 
-async function loadDraft(db: D1Database, orgId: string, id: string): Promise<DraftRow> {
+async function loadDraft(db: Db, orgId: string, id: string): Promise<DraftRow> {
   const row = await db
-    .prepare(`SELECT ${DRAFT_COLS} FROM flow_drafts WHERE id = ? AND org_id = ?`)
-    .bind(id, orgId)
-    .first<DraftRow>()
+    .select(DRAFT_COLS)
+    .from(flow_drafts)
+    .where(and(eq(flow_drafts.id, id), eq(flow_drafts.org_id, orgId)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Draft not found')
   return row
 }
@@ -72,13 +91,19 @@ flowDrafts.get(
     const { orgId } = c.get('auth')
     const projectId = c.req.param('projectId')
     const status = c.req.query('status') ?? 'draft'
-    const rows = await c.env.DB.prepare(
-      `SELECT ${DRAFT_COLS} FROM flow_drafts
-         WHERE project_id = ? AND org_id = ? AND status = ? ORDER BY created_at DESC`,
-    )
-      .bind(projectId, orgId, status)
-      .all<DraftRow>()
-    return c.json({ drafts: rows.results.map(draftDto) })
+    const db = createDb(c.env.DB)
+    const rows = await db
+      .select(DRAFT_COLS)
+      .from(flow_drafts)
+      .where(
+        and(
+          eq(flow_drafts.project_id, projectId),
+          eq(flow_drafts.org_id, orgId),
+          eq(flow_drafts.status, status),
+        ),
+      )
+      .orderBy(desc(flow_drafts.created_at))
+    return c.json({ drafts: rows.map(draftDto) })
   },
 )
 
@@ -89,16 +114,24 @@ flowDrafts.post(
   authorize({ capability: 'flows.write' }),
   async (c) => {
     const actor = c.get('auth')
-    const draft = await loadDraft(c.env.DB, actor.orgId, c.req.param('id'))
+    const db = createDb(c.env.DB)
+    const draft = await loadDraft(db, actor.orgId, c.req.param('id'))
     if (draft.status !== 'draft') {
       throw new HttpError('conflict', `Draft is already ${draft.status}`)
     }
 
-    const clash = await c.env.DB.prepare(
-      `SELECT 1 FROM flows WHERE project_id = ? AND name = ? AND deleted_at IS NULL`,
-    )
-      .bind(draft.project_id, draft.name)
-      .first()
+    const clash = await db
+      .select({ id: flows.id })
+      .from(flows)
+      .where(
+        and(
+          eq(flows.project_id, draft.project_id),
+          eq(flows.name, draft.name),
+          isNull(flows.deleted_at),
+        ),
+      )
+      .limit(1)
+      .get()
     if (clash) {
       throw new HttpError(
         'conflict',
@@ -115,36 +148,36 @@ flowDrafts.post(
     const diff = `${summarizeFlowDiff(null, body)} (approved from AI draft)`
 
     await writeAudited(
-      c.env.DB,
+      db,
       [
         // origin = 'ai' credits the model; the version author is the approver.
-        c.env.DB.prepare(
-          `INSERT INTO flows
-             (id, project_id, name, description, current_version_id, engines, origin,
-              created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, NULL, ?, 'ai', ?, ?, ?)`,
-        ).bind(
-          flowId,
-          draft.project_id,
-          draft.name,
-          draft.description,
-          draft.engines,
-          actor.actorId,
-          now,
-          now,
-        ),
-        c.env.DB.prepare(
-          `INSERT INTO flow_versions
-             (id, flow_id, version, steps, load_profile, author_id, diff_summary, created_at)
-           VALUES (?, ?, 1, ?, ?, ?, ?, ?)`,
-        ).bind(versionId, flowId, draft.steps, draft.load_profile, actor.actorId, diff, now),
-        c.env.DB.prepare(`UPDATE flows SET current_version_id = ? WHERE id = ?`).bind(
-          versionId,
-          flowId,
-        ),
-        c.env.DB.prepare(
-          `UPDATE flow_drafts SET status = 'approved', approved_flow_id = ?, updated_at = ? WHERE id = ?`,
-        ).bind(flowId, now, draft.id),
+        db.insert(flows).values({
+          id: flowId,
+          project_id: draft.project_id,
+          name: draft.name,
+          description: draft.description,
+          current_version_id: null,
+          engines: draft.engines,
+          origin: 'ai',
+          created_by: actor.actorId,
+          created_at: now,
+          updated_at: now,
+        }),
+        db.insert(flow_versions).values({
+          id: versionId,
+          flow_id: flowId,
+          version: 1,
+          steps: draft.steps,
+          load_profile: draft.load_profile,
+          author_id: actor.actorId,
+          diff_summary: diff,
+          created_at: now,
+        }),
+        db.update(flows).set({ current_version_id: versionId }).where(eq(flows.id, flowId)),
+        db
+          .update(flow_drafts)
+          .set({ status: 'approved', approved_flow_id: flowId, updated_at: now })
+          .where(eq(flow_drafts.id, draft.id)),
       ],
       {
         orgId: actor.orgId,
@@ -176,16 +209,18 @@ flowDrafts.post(
   authorize({ capability: 'flows.write' }),
   async (c) => {
     const actor = c.get('auth')
-    const draft = await loadDraft(c.env.DB, actor.orgId, c.req.param('id'))
+    const db = createDb(c.env.DB)
+    const draft = await loadDraft(db, actor.orgId, c.req.param('id'))
     if (draft.status !== 'draft')
       throw new HttpError('conflict', `Draft is already ${draft.status}`)
     const now = new Date().toISOString()
     await writeAudited(
-      c.env.DB,
+      db,
       [
-        c.env.DB.prepare(
-          `UPDATE flow_drafts SET status = 'rejected', updated_at = ? WHERE id = ?`,
-        ).bind(now, draft.id),
+        db
+          .update(flow_drafts)
+          .set({ status: 'rejected', updated_at: now })
+          .where(eq(flow_drafts.id, draft.id)),
       ],
       {
         orgId: actor.orgId,

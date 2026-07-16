@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!**/dist", "!**/.wrangler", "!**/worker-configuration.d.ts"]
+    "includes": ["**", "!**/dist", "!**/.wrangler", "!**/worker-configuration.d.ts", "!migrations"]
   },
   "formatter": {
     "enabled": true,

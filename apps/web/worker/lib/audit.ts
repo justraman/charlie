@@ -3,7 +3,13 @@
 // transaction) as the mutation, so an action and its record commit together —
 // there is no window where a change is applied but unlogged, or vice versa.
 
+import type { BatchItem } from 'drizzle-orm/batch'
+import type { Db } from '../db/client'
+import { audit_log } from '../db/schema'
 import { uuidv7 } from './ids'
+
+/** A Drizzle statement that can ride in a `db.batch([...])`. */
+export type Mutation = BatchItem<'sqlite'>
 
 export type ActorKind = 'user' | 'api_key' | 'system'
 
@@ -43,29 +49,22 @@ function serialize(value: unknown): string | null {
   return JSON.stringify(redact(value))
 }
 
-/** Build the INSERT statement for an audit row (unbound side effects). */
-export function auditStatement(db: D1Database, entry: AuditEntry): D1PreparedStatement {
-  return db
-    .prepare(
-      `INSERT INTO audit_log
-        (id, org_id, actor_id, actor_kind, action, entity_type, entity_id,
-         before, after, ip, user_agent, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      uuidv7(),
-      entry.orgId,
-      entry.actorId,
-      entry.actorKind,
-      entry.action,
-      entry.entityType,
-      entry.entityId,
-      serialize(entry.before),
-      serialize(entry.after),
-      entry.ip ?? null,
-      entry.userAgent ?? null,
-      new Date().toISOString(),
-    )
+/** Build the INSERT statement for an audit row (a batchable Drizzle insert). */
+export function auditStatement(db: Db, entry: AuditEntry): Mutation {
+  return db.insert(audit_log).values({
+    id: uuidv7(),
+    org_id: entry.orgId,
+    actor_id: entry.actorId,
+    actor_kind: entry.actorKind,
+    action: entry.action,
+    entity_type: entry.entityType,
+    entity_id: entry.entityId,
+    before: serialize(entry.before),
+    after: serialize(entry.after),
+    ip: entry.ip ?? null,
+    user_agent: entry.userAgent ?? null,
+    created_at: new Date().toISOString(),
+  })
 }
 
 /**
@@ -73,11 +72,15 @@ export function auditStatement(db: D1Database, entry: AuditEntry): D1PreparedSta
  * single atomic D1 batch. Use this for every mutating endpoint.
  */
 export async function writeAudited(
-  db: D1Database,
-  mutations: D1PreparedStatement[],
+  db: Db,
+  mutations: Mutation[],
   entry: AuditEntry,
 ): Promise<void> {
-  await db.batch([...mutations, auditStatement(db, entry)])
+  // Audit row first makes the array a statically non-empty tuple (satisfying
+  // Drizzle's batch signature without a cast). The whole batch is one atomic
+  // D1 transaction, so ordering within it does not affect the guarantee, and
+  // audit_log has no FKs into the mutated rows.
+  await db.batch([auditStatement(db, entry), ...mutations])
 }
 
 /**
@@ -85,6 +88,6 @@ export async function writeAudited(
  * logout, and denied-access events, which the spec audits even though they
  * change no domain entity.
  */
-export async function writeAudit(db: D1Database, entry: AuditEntry): Promise<void> {
-  await auditStatement(db, entry).run()
+export async function writeAudit(db: Db, entry: AuditEntry): Promise<void> {
+  await auditStatement(db, entry)
 }

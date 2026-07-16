@@ -6,8 +6,11 @@ import {
   loadProfileSchema,
   summarizeFlowDiff,
 } from '@charlie/flow-core'
+import { and, asc, desc, eq, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { createDb, type Db } from '../db/client'
+import { flow_versions, flows as flowsTable, projects, users } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { clientIp, HttpError, userAgent } from '../lib/http'
@@ -73,34 +76,43 @@ function versionDto(row: VersionRow) {
   }
 }
 
-async function assertProject(db: D1Database, orgId: string, projectId: string): Promise<void> {
+async function assertProject(db: Db, orgId: string, projectId: string): Promise<void> {
   const row = await db
-    .prepare(`SELECT 1 FROM projects WHERE id = ? AND org_id = ? AND deleted_at IS NULL`)
-    .bind(projectId, orgId)
-    .first()
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.org_id, orgId), isNull(projects.deleted_at)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Project not found')
 }
 
-async function loadFlow(db: D1Database, orgId: string, id: string): Promise<FlowRow> {
+async function loadFlow(db: Db, orgId: string, id: string): Promise<FlowRow> {
   const row = await db
-    .prepare(
-      `SELECT f.id, f.project_id, f.name, f.description, f.current_version_id, f.engines,
-              f.origin, f.created_by, f.created_at, f.updated_at
-         FROM flows f
-         JOIN projects p ON p.id = f.project_id
-        WHERE f.id = ? AND p.org_id = ? AND f.deleted_at IS NULL`,
-    )
-    .bind(id, orgId)
-    .first<FlowRow>()
+    .select({
+      id: flowsTable.id,
+      project_id: flowsTable.project_id,
+      name: flowsTable.name,
+      description: flowsTable.description,
+      current_version_id: flowsTable.current_version_id,
+      engines: flowsTable.engines,
+      origin: flowsTable.origin,
+      created_by: flowsTable.created_by,
+      created_at: flowsTable.created_at,
+      updated_at: flowsTable.updated_at,
+    })
+    .from(flowsTable)
+    .innerJoin(projects, eq(projects.id, flowsTable.project_id))
+    .where(and(eq(flowsTable.id, id), eq(projects.org_id, orgId), isNull(flowsTable.deleted_at)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Flow not found')
   return row
 }
 
-async function loadVersion(db: D1Database, flowId: string, versionId: string): Promise<VersionRow> {
+async function loadVersion(db: Db, flowId: string, versionId: string): Promise<VersionRow> {
   const row = await db
-    .prepare(`SELECT * FROM flow_versions WHERE id = ? AND flow_id = ?`)
-    .bind(versionId, flowId)
-    .first<VersionRow>()
+    .select()
+    .from(flow_versions)
+    .where(and(eq(flow_versions.id, versionId), eq(flow_versions.flow_id, flowId)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Version not found')
   return row
 }
@@ -113,18 +125,28 @@ flows.get(
   async (c) => {
     const { orgId } = c.get('auth')
     const projectId = c.req.param('projectId')
-    await assertProject(c.env.DB, orgId, projectId)
-    const rows = await c.env.DB.prepare(
-      `SELECT f.id, f.project_id, f.name, f.description, f.current_version_id, f.engines,
-            f.origin, f.created_by, f.created_at, f.updated_at, v.version AS current_version
-       FROM flows f
-       LEFT JOIN flow_versions v ON v.id = f.current_version_id
-      WHERE f.project_id = ? AND f.deleted_at IS NULL ORDER BY f.name ASC`,
-    )
-      .bind(projectId)
-      .all<FlowRow & { current_version: number | null }>()
+    const db = createDb(c.env.DB)
+    await assertProject(db, orgId, projectId)
+    const rows = await db
+      .select({
+        id: flowsTable.id,
+        project_id: flowsTable.project_id,
+        name: flowsTable.name,
+        description: flowsTable.description,
+        current_version_id: flowsTable.current_version_id,
+        engines: flowsTable.engines,
+        origin: flowsTable.origin,
+        created_by: flowsTable.created_by,
+        created_at: flowsTable.created_at,
+        updated_at: flowsTable.updated_at,
+        current_version: flow_versions.version,
+      })
+      .from(flowsTable)
+      .leftJoin(flow_versions, eq(flow_versions.id, flowsTable.current_version_id))
+      .where(and(eq(flowsTable.project_id, projectId), isNull(flowsTable.deleted_at)))
+      .orderBy(asc(flowsTable.name))
     return c.json({
-      flows: rows.results.map((r) => flowDto(r, r.current_version)),
+      flows: rows.map((r) => flowDto(r, r.current_version)),
     })
   },
 )
@@ -139,14 +161,22 @@ flows.post(
   async (c) => {
     const actor = c.get('auth')
     const projectId = c.req.param('projectId')
-    await assertProject(c.env.DB, actor.orgId, projectId)
+    const db = createDb(c.env.DB)
+    await assertProject(db, actor.orgId, projectId)
     const body = await parseBody(c, createSchema)
 
-    const clash = await c.env.DB.prepare(
-      `SELECT 1 FROM flows WHERE project_id = ? AND name = ? AND deleted_at IS NULL`,
-    )
-      .bind(projectId, body.name)
-      .first()
+    const clash = await db
+      .select({ id: flowsTable.id })
+      .from(flowsTable)
+      .where(
+        and(
+          eq(flowsTable.project_id, projectId),
+          eq(flowsTable.name, body.name),
+          isNull(flowsTable.deleted_at),
+        ),
+      )
+      .limit(1)
+      .get()
     if (clash) throw new HttpError('conflict', `A flow named "${body.name}" already exists`)
 
     const flowId = uuidv7()
@@ -156,41 +186,35 @@ flows.post(
     const diff = summarizeFlowDiff(null, flowBody)
 
     await writeAudited(
-      c.env.DB,
+      db,
       [
         // FK-safe ordering: flow (no current version) → version → point flow at it.
-        c.env.DB.prepare(
-          `INSERT INTO flows
-           (id, project_id, name, description, current_version_id, engines, origin,
-            created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, NULL, ?, 'manual', ?, ?, ?)`,
-        ).bind(
-          flowId,
-          projectId,
-          body.name,
-          body.description ?? null,
-          JSON.stringify(body.engines),
-          actor.actorId,
-          now,
-          now,
-        ),
-        c.env.DB.prepare(
-          `INSERT INTO flow_versions
-           (id, flow_id, version, steps, load_profile, author_id, diff_summary, created_at)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?)`,
-        ).bind(
-          versionId,
-          flowId,
-          JSON.stringify(body.steps),
-          body.loadProfile ? JSON.stringify(body.loadProfile) : null,
-          actor.actorId,
-          diff,
-          now,
-        ),
-        c.env.DB.prepare(`UPDATE flows SET current_version_id = ? WHERE id = ?`).bind(
-          versionId,
-          flowId,
-        ),
+        db.insert(flowsTable).values({
+          id: flowId,
+          project_id: projectId,
+          name: body.name,
+          description: body.description ?? null,
+          current_version_id: null,
+          engines: JSON.stringify(body.engines),
+          origin: 'manual',
+          created_by: actor.actorId,
+          created_at: now,
+          updated_at: now,
+        }),
+        db.insert(flow_versions).values({
+          id: versionId,
+          flow_id: flowId,
+          version: 1,
+          steps: JSON.stringify(body.steps),
+          load_profile: body.loadProfile ? JSON.stringify(body.loadProfile) : null,
+          author_id: actor.actorId,
+          diff_summary: diff,
+          created_at: now,
+        }),
+        db
+          .update(flowsTable)
+          .set({ current_version_id: versionId })
+          .where(eq(flowsTable.id, flowId)),
       ],
       {
         orgId: actor.orgId,
@@ -205,7 +229,7 @@ flows.post(
       },
     )
 
-    const row = await loadFlow(c.env.DB, actor.orgId, flowId)
+    const row = await loadFlow(db, actor.orgId, flowId)
     return c.json({ flow: flowDto(row, 1) }, 201)
   },
 )
@@ -213,9 +237,10 @@ flows.post(
 // --- GET /api/flows/:id (viewer) — flow + current version -------------------
 flows.get('/flows/:id', authenticate, authorize({ capability: 'projects.view' }), async (c) => {
   const { orgId } = c.get('auth')
-  const row = await loadFlow(c.env.DB, orgId, c.req.param('id'))
+  const db = createDb(c.env.DB)
+  const row = await loadFlow(db, orgId, c.req.param('id'))
   const version = row.current_version_id
-    ? await loadVersion(c.env.DB, row.id, row.current_version_id)
+    ? await loadVersion(db, row.id, row.current_version_id)
     : null
   return c.json({
     flow: flowDto(row, version?.version ?? null),
@@ -233,11 +258,12 @@ const putSchema = flowBodySchema.extend({
 flows.put('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), async (c) => {
   const actor = c.get('auth')
   const id = c.req.param('id')
-  const flow = await loadFlow(c.env.DB, actor.orgId, id)
+  const db = createDb(c.env.DB)
+  const flow = await loadFlow(db, actor.orgId, id)
   const body = await parseBody(c, putSchema)
 
   const current = flow.current_version_id
-    ? await loadVersion(c.env.DB, flow.id, flow.current_version_id)
+    ? await loadVersion(db, flow.id, flow.current_version_id)
     : null
   const prevBody: FlowBody | null = current
     ? {
@@ -255,26 +281,27 @@ flows.put('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), 
   const description = body.description === undefined ? flow.description : body.description
 
   await writeAudited(
-    c.env.DB,
+    db,
     [
-      c.env.DB.prepare(
-        `INSERT INTO flow_versions
-           (id, flow_id, version, steps, load_profile, author_id, diff_summary, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        versionId,
-        flow.id,
-        nextVersion,
-        JSON.stringify(body.steps),
-        body.loadProfile ? JSON.stringify(body.loadProfile) : null,
-        actor.actorId,
-        diff,
-        now,
-      ),
-      c.env.DB.prepare(
-        `UPDATE flows SET current_version_id = ?, engines = ?, description = ?, updated_at = ?
-           WHERE id = ?`,
-      ).bind(versionId, engines, description, now, flow.id),
+      db.insert(flow_versions).values({
+        id: versionId,
+        flow_id: flow.id,
+        version: nextVersion,
+        steps: JSON.stringify(body.steps),
+        load_profile: body.loadProfile ? JSON.stringify(body.loadProfile) : null,
+        author_id: actor.actorId,
+        diff_summary: diff,
+        created_at: now,
+      }),
+      db
+        .update(flowsTable)
+        .set({
+          current_version_id: versionId,
+          engines,
+          description,
+          updated_at: now,
+        })
+        .where(eq(flowsTable.id, flow.id)),
     ],
     {
       orgId: actor.orgId,
@@ -290,8 +317,8 @@ flows.put('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), 
     },
   )
 
-  const row = await loadFlow(c.env.DB, actor.orgId, flow.id)
-  const version = await loadVersion(c.env.DB, flow.id, versionId)
+  const row = await loadFlow(db, actor.orgId, flow.id)
+  const version = await loadVersion(db, flow.id, versionId)
   return c.json({ flow: flowDto(row, nextVersion), currentVersion: versionDto(version) })
 })
 
@@ -302,26 +329,24 @@ flows.get(
   authorize({ capability: 'projects.view' }),
   async (c) => {
     const { orgId } = c.get('auth')
-    const flow = await loadFlow(c.env.DB, orgId, c.req.param('id'))
-    const rows = await c.env.DB.prepare(
-      `SELECT v.id, v.version, v.author_id, v.diff_summary, v.created_at, u.name AS author_name,
-            u.email AS author_email
-       FROM flow_versions v
-       LEFT JOIN users u ON u.id = v.author_id
-      WHERE v.flow_id = ? ORDER BY v.version DESC`,
-    )
-      .bind(flow.id)
-      .all<{
-        id: string
-        version: number
-        author_id: string
-        diff_summary: string | null
-        created_at: string
-        author_name: string | null
-        author_email: string | null
-      }>()
+    const db = createDb(c.env.DB)
+    const flow = await loadFlow(db, orgId, c.req.param('id'))
+    const rows = await db
+      .select({
+        id: flow_versions.id,
+        version: flow_versions.version,
+        author_id: flow_versions.author_id,
+        diff_summary: flow_versions.diff_summary,
+        created_at: flow_versions.created_at,
+        author_name: users.name,
+        author_email: users.email,
+      })
+      .from(flow_versions)
+      .leftJoin(users, eq(users.id, flow_versions.author_id))
+      .where(eq(flow_versions.flow_id, flow.id))
+      .orderBy(desc(flow_versions.version))
     return c.json({
-      versions: rows.results.map((r) => ({
+      versions: rows.map((r) => ({
         id: r.id,
         version: r.version,
         authorId: r.author_id,
@@ -342,14 +367,15 @@ flows.get(
   authorize({ capability: 'projects.view' }),
   async (c) => {
     const { orgId } = c.get('auth')
-    const flow = await loadFlow(c.env.DB, orgId, c.req.param('id'))
+    const db = createDb(c.env.DB)
+    const flow = await loadFlow(db, orgId, c.req.param('id'))
     const versionNum = Number(c.req.param('v'))
     if (!Number.isInteger(versionNum)) throw new HttpError('bad_request', 'Invalid version number')
-    const row = await c.env.DB.prepare(
-      `SELECT * FROM flow_versions WHERE flow_id = ? AND version = ?`,
-    )
-      .bind(flow.id, versionNum)
-      .first<VersionRow>()
+    const row = await db
+      .select()
+      .from(flow_versions)
+      .where(and(eq(flow_versions.flow_id, flow.id), eq(flow_versions.version, versionNum)))
+      .get()
     if (!row) throw new HttpError('not_found', 'Version not found')
     return c.json({ version: versionDto(row) })
   },
@@ -359,18 +385,13 @@ flows.get(
 flows.delete('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), async (c) => {
   const actor = c.get('auth')
   const id = c.req.param('id')
-  const flow = await loadFlow(c.env.DB, actor.orgId, id)
+  const db = createDb(c.env.DB)
+  const flow = await loadFlow(db, actor.orgId, id)
   const now = new Date().toISOString()
 
   await writeAudited(
-    c.env.DB,
-    [
-      c.env.DB.prepare(`UPDATE flows SET deleted_at = ?, updated_at = ? WHERE id = ?`).bind(
-        now,
-        now,
-        id,
-      ),
-    ],
+    db,
+    [db.update(flowsTable).set({ deleted_at: now, updated_at: now }).where(eq(flowsTable.id, id))],
     {
       orgId: actor.orgId,
       actorId: actor.actorId,

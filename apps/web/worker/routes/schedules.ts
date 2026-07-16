@@ -3,8 +3,11 @@
 // handler) or an on-merge watch (`watch_branch`, fired by the GitHub webhook).
 // Mounted at /api/schedules with an explicit `authenticate` per route.
 
+import { and, desc, eq, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { createDb, type Db } from '../db/client'
+import { environments, projects, runs, schedules as schedulesTable } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { isValidCron, nextDue } from '../lib/cron'
@@ -54,35 +57,59 @@ function scheduleDto(row: ScheduleRow) {
   }
 }
 
-const SCHEDULE_COLS =
-  'id, org_id, project_id, environment_id, flow_selection, engine, profile, trigger_type, cron_expr, watch_branch, enabled, created_by, last_fired_at, next_due_at, created_at, updated_at'
+// The column set returned to clients — mirrors ScheduleRow.
+const SCHEDULE_COLS = {
+  id: schedulesTable.id,
+  org_id: schedulesTable.org_id,
+  project_id: schedulesTable.project_id,
+  environment_id: schedulesTable.environment_id,
+  flow_selection: schedulesTable.flow_selection,
+  engine: schedulesTable.engine,
+  profile: schedulesTable.profile,
+  trigger_type: schedulesTable.trigger_type,
+  cron_expr: schedulesTable.cron_expr,
+  watch_branch: schedulesTable.watch_branch,
+  enabled: schedulesTable.enabled,
+  created_by: schedulesTable.created_by,
+  last_fired_at: schedulesTable.last_fired_at,
+  next_due_at: schedulesTable.next_due_at,
+  created_at: schedulesTable.created_at,
+  updated_at: schedulesTable.updated_at,
+}
 
-async function loadSchedule(db: D1Database, orgId: string, id: string): Promise<ScheduleRow> {
+async function loadSchedule(db: Db, orgId: string, id: string): Promise<ScheduleRow> {
   const row = await db
-    .prepare(`SELECT ${SCHEDULE_COLS} FROM schedules WHERE id = ? AND org_id = ?`)
-    .bind(id, orgId)
-    .first<ScheduleRow>()
+    .select(SCHEDULE_COLS)
+    .from(schedulesTable)
+    .where(and(eq(schedulesTable.id, id), eq(schedulesTable.org_id, orgId)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Schedule not found')
   return row
 }
 
-async function assertProject(db: D1Database, orgId: string, projectId: string): Promise<void> {
+async function assertProject(db: Db, orgId: string, projectId: string): Promise<void> {
   const row = await db
-    .prepare(`SELECT 1 FROM projects WHERE id = ? AND org_id = ? AND deleted_at IS NULL`)
-    .bind(projectId, orgId)
-    .first()
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.org_id, orgId), isNull(projects.deleted_at)))
+    .limit(1)
+    .get()
   if (!row) throw new HttpError('bad_request', 'Unknown project')
 }
 
-async function assertEnvironment(
-  db: D1Database,
-  projectId: string,
-  environmentId: string,
-): Promise<void> {
+async function assertEnvironment(db: Db, projectId: string, environmentId: string): Promise<void> {
   const row = await db
-    .prepare(`SELECT 1 FROM environments WHERE id = ? AND project_id = ? AND deleted_at IS NULL`)
-    .bind(environmentId, projectId)
-    .first()
+    .select({ id: environments.id })
+    .from(environments)
+    .where(
+      and(
+        eq(environments.id, environmentId),
+        eq(environments.project_id, projectId),
+        isNull(environments.deleted_at),
+      ),
+    )
+    .limit(1)
+    .get()
   if (!row) throw new HttpError('bad_request', 'Unknown environment for this project')
 }
 
@@ -119,27 +146,26 @@ const createSchema = z
 // --- GET /api/schedules?project= — list -------------------------------------
 schedules.get('/', authenticate, authorize({ capability: 'projects.view' }), async (c) => {
   const { orgId } = c.get('auth')
+  const db = createDb(c.env.DB)
   const projectId = c.req.query('project')
-  const clauses = ['org_id = ?']
-  const binds: unknown[] = [orgId]
-  if (projectId) {
-    clauses.push('project_id = ?')
-    binds.push(projectId)
-  }
-  const rows = await c.env.DB.prepare(
-    `SELECT ${SCHEDULE_COLS} FROM schedules WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,
-  )
-    .bind(...binds)
-    .all<ScheduleRow>()
-  return c.json({ schedules: rows.results.map(scheduleDto) })
+  const where = projectId
+    ? and(eq(schedulesTable.org_id, orgId), eq(schedulesTable.project_id, projectId))
+    : eq(schedulesTable.org_id, orgId)
+  const rows = await db
+    .select(SCHEDULE_COLS)
+    .from(schedulesTable)
+    .where(where)
+    .orderBy(desc(schedulesTable.created_at))
+  return c.json({ schedules: rows.map(scheduleDto) })
 })
 
 // --- POST /api/schedules — create -------------------------------------------
 schedules.post('/', authenticate, authorize({ capability: 'schedules.manage' }), async (c) => {
   const actor = c.get('auth')
+  const db = createDb(c.env.DB)
   const body = await parseBody(c, createSchema)
-  await assertProject(c.env.DB, actor.orgId, body.projectId)
-  await assertEnvironment(c.env.DB, body.projectId, body.environmentId)
+  await assertProject(db, actor.orgId, body.projectId)
+  await assertEnvironment(db, body.projectId, body.environmentId)
 
   const id = uuidv7()
   const now = new Date().toISOString()
@@ -150,31 +176,26 @@ schedules.post('/', authenticate, authorize({ capability: 'schedules.manage' }),
       : null
 
   await writeAudited(
-    c.env.DB,
+    db,
     [
-      c.env.DB.prepare(
-        `INSERT INTO schedules
-           (id, org_id, project_id, environment_id, flow_selection, engine, profile,
-            trigger_type, cron_expr, watch_branch, enabled, created_by,
-            last_fired_at, next_due_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-      ).bind(
+      db.insert(schedulesTable).values({
         id,
-        actor.orgId,
-        body.projectId,
-        body.environmentId,
-        JSON.stringify(body.flowSelection),
-        body.engine,
-        body.profile,
-        body.triggerType,
-        body.triggerType === 'cron' ? body.cronExpr! : null,
-        body.triggerType === 'on_merge' ? body.watchBranch! : null,
-        body.enabled ? 1 : 0,
-        actor.actorId,
-        nextDueAt,
-        now,
-        now,
-      ),
+        org_id: actor.orgId,
+        project_id: body.projectId,
+        environment_id: body.environmentId,
+        flow_selection: JSON.stringify(body.flowSelection),
+        engine: body.engine,
+        profile: body.profile,
+        trigger_type: body.triggerType,
+        cron_expr: body.triggerType === 'cron' ? body.cronExpr! : null,
+        watch_branch: body.triggerType === 'on_merge' ? body.watchBranch! : null,
+        enabled: body.enabled ? 1 : 0,
+        created_by: actor.actorId,
+        last_fired_at: null,
+        next_due_at: nextDueAt,
+        created_at: now,
+        updated_at: now,
+      }),
     ],
     {
       orgId: actor.orgId,
@@ -195,7 +216,7 @@ schedules.post('/', authenticate, authorize({ capability: 'schedules.manage' }),
     },
   )
 
-  const row = await loadSchedule(c.env.DB, actor.orgId, id)
+  const row = await loadSchedule(db, actor.orgId, id)
   return c.json({ schedule: scheduleDto(row) }, 201)
 })
 
@@ -211,7 +232,8 @@ const patchSchema = z.object({
 // --- PATCH /api/schedules/:id — update / enable-disable ---------------------
 schedules.patch('/:id', authenticate, authorize({ capability: 'schedules.manage' }), async (c) => {
   const actor = c.get('auth')
-  const existing = await loadSchedule(c.env.DB, actor.orgId, c.req.param('id'))
+  const db = createDb(c.env.DB)
+  const existing = await loadSchedule(db, actor.orgId, c.req.param('id'))
   const body = await parseBody(c, patchSchema)
 
   const cronExpr = body.cronExpr ?? existing.cron_expr
@@ -232,24 +254,23 @@ schedules.patch('/:id', authenticate, authorize({ capability: 'schedules.manage'
   }
 
   await writeAudited(
-    c.env.DB,
+    db,
     [
-      c.env.DB.prepare(
-        `UPDATE schedules SET
-           flow_selection = ?, engine = ?, profile = ?, cron_expr = ?, watch_branch = ?,
-           enabled = ?, next_due_at = ?, updated_at = ?
-         WHERE id = ?`,
-      ).bind(
-        body.flowSelection ? JSON.stringify(body.flowSelection) : existing.flow_selection,
-        body.engine ?? existing.engine,
-        body.profile ?? existing.profile,
-        cronExpr,
-        body.watchBranch ?? existing.watch_branch,
-        enabled ? 1 : 0,
-        nextDueAt,
-        now,
-        existing.id,
-      ),
+      db
+        .update(schedulesTable)
+        .set({
+          flow_selection: body.flowSelection
+            ? JSON.stringify(body.flowSelection)
+            : existing.flow_selection,
+          engine: body.engine ?? existing.engine,
+          profile: body.profile ?? existing.profile,
+          cron_expr: cronExpr,
+          watch_branch: body.watchBranch ?? existing.watch_branch,
+          enabled: enabled ? 1 : 0,
+          next_due_at: nextDueAt,
+          updated_at: now,
+        })
+        .where(eq(schedulesTable.id, existing.id)),
     ],
     {
       orgId: actor.orgId,
@@ -265,55 +286,53 @@ schedules.patch('/:id', authenticate, authorize({ capability: 'schedules.manage'
     },
   )
 
-  const row = await loadSchedule(c.env.DB, actor.orgId, existing.id)
+  const row = await loadSchedule(db, actor.orgId, existing.id)
   return c.json({ schedule: scheduleDto(row) })
 })
 
 // --- DELETE /api/schedules/:id ----------------------------------------------
 schedules.delete('/:id', authenticate, authorize({ capability: 'schedules.manage' }), async (c) => {
   const actor = c.get('auth')
-  const existing = await loadSchedule(c.env.DB, actor.orgId, c.req.param('id'))
-  await writeAudited(
-    c.env.DB,
-    [c.env.DB.prepare(`DELETE FROM schedules WHERE id = ?`).bind(existing.id)],
-    {
-      orgId: actor.orgId,
-      actorId: actor.actorId,
-      actorKind: actor.actorKind,
-      action: 'schedule.delete',
-      entityType: 'schedule',
-      entityId: existing.id,
-      before: { triggerType: existing.trigger_type, enabled: existing.enabled === 1 },
-      after: null,
-      ip: clientIp(c),
-      userAgent: userAgent(c),
-    },
-  )
+  const db = createDb(c.env.DB)
+  const existing = await loadSchedule(db, actor.orgId, c.req.param('id'))
+  await writeAudited(db, [db.delete(schedulesTable).where(eq(schedulesTable.id, existing.id))], {
+    orgId: actor.orgId,
+    actorId: actor.actorId,
+    actorKind: actor.actorKind,
+    action: 'schedule.delete',
+    entityType: 'schedule',
+    entityId: existing.id,
+    before: { triggerType: existing.trigger_type, enabled: existing.enabled === 1 },
+    after: null,
+    ip: clientIp(c),
+    userAgent: userAgent(c),
+  })
   return c.json({ ok: true })
 })
 
 // --- GET /api/schedules/:id/runs — run history ------------------------------
 schedules.get('/:id/runs', authenticate, authorize({ capability: 'projects.view' }), async (c) => {
   const { orgId } = c.get('auth')
-  const schedule = await loadSchedule(c.env.DB, orgId, c.req.param('id'))
-  const rows = await c.env.DB.prepare(
-    `SELECT id, engine, profile, status, trigger, commit_sha, queued_at, started_at, finished_at
-         FROM runs WHERE schedule_id = ? ORDER BY queued_at DESC LIMIT 50`,
-  )
-    .bind(schedule.id)
-    .all<{
-      id: string
-      engine: string
-      profile: string
-      status: string
-      trigger: string
-      commit_sha: string | null
-      queued_at: string
-      started_at: string | null
-      finished_at: string | null
-    }>()
+  const db = createDb(c.env.DB)
+  const schedule = await loadSchedule(db, orgId, c.req.param('id'))
+  const rows = await db
+    .select({
+      id: runs.id,
+      engine: runs.engine,
+      profile: runs.profile,
+      status: runs.status,
+      trigger: runs.trigger,
+      commit_sha: runs.commit_sha,
+      queued_at: runs.queued_at,
+      started_at: runs.started_at,
+      finished_at: runs.finished_at,
+    })
+    .from(runs)
+    .where(eq(runs.schedule_id, schedule.id))
+    .orderBy(desc(runs.queued_at))
+    .limit(50)
   return c.json({
-    runs: rows.results.map((r) => ({
+    runs: rows.map((r) => ({
       id: r.id,
       engine: r.engine,
       profile: r.profile,

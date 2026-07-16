@@ -5,12 +5,14 @@
 
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { createDb } from '../db/client'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { githubConfigured } from '../lib/github'
 import { clientIp, HttpError, userAgent } from '../lib/http'
 import {
   deleteIntegrationStatement,
+  encryptIntegrationConfig,
   integrationStatus,
   upsertIntegrationStatement,
 } from '../lib/integrations'
@@ -41,17 +43,23 @@ const slackConnectSchema = z.object({
 // --- PUT /api/integrations/slack — connect / update -------------------------
 integrations.put('/slack', authorize({ capability: 'integrations.manage' }), async (c) => {
   const actor = c.get('auth')
+  const db = createDb(c.env.DB)
   const body = await parseBody(c, slackConnectSchema)
 
-  const stmt = await upsertIntegrationStatement(c.env, {
+  const configCiphertext = await encryptIntegrationConfig(c.env, {
+    teamId: body.teamId,
+    botToken: body.botToken,
+    signingSecret: body.signingSecret,
+  })
+  const stmt = upsertIntegrationStatement(db, {
     orgId: actor.orgId,
     kind: 'slack',
     externalId: body.teamId ?? null,
-    config: { teamId: body.teamId, botToken: body.botToken, signingSecret: body.signingSecret },
+    configCiphertext,
     createdBy: actor.actorId,
   })
 
-  await writeAudited(c.env.DB, [stmt], {
+  await writeAudited(db, [stmt], {
     orgId: actor.orgId,
     actorId: actor.actorId,
     actorKind: actor.actorKind,
@@ -71,10 +79,11 @@ integrations.put('/slack', authorize({ capability: 'integrations.manage' }), asy
 // --- DELETE /api/integrations/slack — disconnect ----------------------------
 integrations.delete('/slack', authorize({ capability: 'integrations.manage' }), async (c) => {
   const actor = c.get('auth')
+  const db = createDb(c.env.DB)
   const existing = await integrationStatus(c.env, actor.orgId, 'slack')
   if (!existing.connected) throw new HttpError('not_found', 'Slack is not connected')
 
-  await writeAudited(c.env.DB, [deleteIntegrationStatement(c.env, actor.orgId, 'slack')], {
+  await writeAudited(db, [deleteIntegrationStatement(db, actor.orgId, 'slack')], {
     orgId: actor.orgId,
     actorId: actor.actorId,
     actorKind: actor.actorKind,

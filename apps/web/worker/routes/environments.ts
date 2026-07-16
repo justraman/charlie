@@ -1,6 +1,9 @@
+import { and, asc, eq, isNull } from 'drizzle-orm'
 import { type Context, Hono } from 'hono'
 import { z } from 'zod'
 import { roleHasCapability } from '../../shared/roles'
+import { createDb, type Db } from '../db/client'
+import { environments as environmentsTable, projects } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { clientIp, HttpError, userAgent } from '../lib/http'
@@ -41,29 +44,43 @@ async function toDto(row: EnvRow, kek: string | undefined) {
   }
 }
 
-const ENV_COLS =
-  'id, project_id, name, base_url, headers, secrets_ciphertext, auth_config, created_at, updated_at'
+// The column set loaded for an environment. `secrets_ciphertext` is included so
+// the DTO layer can surface secret *names* (masked) — it is never returned raw.
+const ENV_COLS = {
+  id: environmentsTable.id,
+  project_id: environmentsTable.project_id,
+  name: environmentsTable.name,
+  base_url: environmentsTable.base_url,
+  headers: environmentsTable.headers,
+  secrets_ciphertext: environmentsTable.secrets_ciphertext,
+  auth_config: environmentsTable.auth_config,
+  created_at: environmentsTable.created_at,
+  updated_at: environmentsTable.updated_at,
+}
 
-async function assertProject(db: D1Database, orgId: string, projectId: string): Promise<void> {
+async function assertProject(db: Db, orgId: string, projectId: string): Promise<void> {
   const row = await db
-    .prepare(`SELECT 1 FROM projects WHERE id = ? AND org_id = ? AND deleted_at IS NULL`)
-    .bind(projectId, orgId)
-    .first()
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.org_id, orgId), isNull(projects.deleted_at)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Project not found')
 }
 
-async function loadEnv(db: D1Database, orgId: string, id: string): Promise<EnvRow> {
+async function loadEnv(db: Db, orgId: string, id: string): Promise<EnvRow> {
   // Join to projects to enforce org ownership.
   const row = await db
-    .prepare(
-      `SELECT e.id, e.project_id, e.name, e.base_url, e.headers, e.secrets_ciphertext,
-              e.auth_config, e.created_at, e.updated_at
-         FROM environments e
-         JOIN projects p ON p.id = e.project_id
-        WHERE e.id = ? AND p.org_id = ? AND e.deleted_at IS NULL`,
+    .select(ENV_COLS)
+    .from(environmentsTable)
+    .innerJoin(projects, eq(projects.id, environmentsTable.project_id))
+    .where(
+      and(
+        eq(environmentsTable.id, id),
+        eq(projects.org_id, orgId),
+        isNull(environmentsTable.deleted_at),
+      ),
     )
-    .bind(id, orgId)
-    .first<EnvRow>()
+    .get()
   if (!row) throw new HttpError('not_found', 'Environment not found')
   return row
 }
@@ -86,14 +103,14 @@ environments.get(
   async (c) => {
     const { orgId } = c.get('auth')
     const projectId = c.req.param('projectId')
-    await assertProject(c.env.DB, orgId, projectId)
-    const rows = await c.env.DB.prepare(
-      `SELECT ${ENV_COLS} FROM environments
-         WHERE project_id = ? AND deleted_at IS NULL ORDER BY name ASC`,
-    )
-      .bind(projectId)
-      .all<EnvRow>()
-    const dtos = await Promise.all(rows.results.map((r) => toDto(r, c.env.CHARLIE_KEK)))
+    const db = createDb(c.env.DB)
+    await assertProject(db, orgId, projectId)
+    const rows = await db
+      .select(ENV_COLS)
+      .from(environmentsTable)
+      .where(and(eq(environmentsTable.project_id, projectId), isNull(environmentsTable.deleted_at)))
+      .orderBy(asc(environmentsTable.name))
+    const dtos = await Promise.all(rows.map((r) => toDto(r, c.env.CHARLIE_KEK)))
     return c.json({ environments: dtos })
   },
 )
@@ -114,7 +131,8 @@ environments.post(
   async (c) => {
     const actor = c.get('auth')
     const projectId = c.req.param('projectId')
-    await assertProject(c.env.DB, actor.orgId, projectId)
+    const db = createDb(c.env.DB)
+    await assertProject(db, actor.orgId, projectId)
     const body = await parseBody(c, createSchema)
 
     if (body.secrets && Object.keys(body.secrets).length > 0) assertCanManageSecrets(c)
@@ -127,24 +145,19 @@ environments.post(
         : null
 
     await writeAudited(
-      c.env.DB,
+      db,
       [
-        c.env.DB.prepare(
-          `INSERT INTO environments
-             (id, project_id, name, base_url, headers, secrets_ciphertext, auth_config,
-              created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).bind(
+        db.insert(environmentsTable).values({
           id,
-          projectId,
-          body.name,
-          body.baseUrl,
-          JSON.stringify(body.headers ?? {}),
-          ciphertext,
-          body.authConfig !== undefined ? JSON.stringify(body.authConfig) : null,
-          now,
-          now,
-        ),
+          project_id: projectId,
+          name: body.name,
+          base_url: body.baseUrl,
+          headers: JSON.stringify(body.headers ?? {}),
+          secrets_ciphertext: ciphertext,
+          auth_config: body.authConfig !== undefined ? JSON.stringify(body.authConfig) : null,
+          created_at: now,
+          updated_at: now,
+        }),
       ],
       {
         orgId: actor.orgId,
@@ -164,7 +177,7 @@ environments.post(
       },
     )
 
-    const row = await loadEnv(c.env.DB, actor.orgId, id)
+    const row = await loadEnv(db, actor.orgId, id)
     return c.json({ environment: await toDto(row, c.env.CHARLIE_KEK) }, 201)
   },
 )
@@ -188,7 +201,8 @@ environments.patch(
   async (c) => {
     const actor = c.get('auth')
     const id = c.req.param('id')
-    const before = await loadEnv(c.env.DB, actor.orgId, id)
+    const db = createDb(c.env.DB)
+    const before = await loadEnv(db, actor.orgId, id)
     const body = await parseBody(c, patchSchema)
 
     let ciphertext = before.secrets_ciphertext
@@ -212,13 +226,19 @@ environments.patch(
     }
 
     await writeAudited(
-      c.env.DB,
+      db,
       [
-        c.env.DB.prepare(
-          `UPDATE environments SET name = ?, base_url = ?, headers = ?, secrets_ciphertext = ?,
-                                 auth_config = ?, updated_at = ?
-           WHERE id = ?`,
-        ).bind(next.name, next.base_url, next.headers, ciphertext, next.auth_config, now, id),
+        db
+          .update(environmentsTable)
+          .set({
+            name: next.name,
+            base_url: next.base_url,
+            headers: next.headers,
+            secrets_ciphertext: ciphertext,
+            auth_config: next.auth_config,
+            updated_at: now,
+          })
+          .where(eq(environmentsTable.id, id)),
       ],
       {
         orgId: actor.orgId,
@@ -234,7 +254,7 @@ environments.patch(
       },
     )
 
-    const row = await loadEnv(c.env.DB, actor.orgId, id)
+    const row = await loadEnv(db, actor.orgId, id)
     return c.json({ environment: await toDto(row, c.env.CHARLIE_KEK) })
   },
 )
@@ -247,15 +267,17 @@ environments.delete(
   async (c) => {
     const actor = c.get('auth')
     const id = c.req.param('id')
-    const before = await loadEnv(c.env.DB, actor.orgId, id)
+    const db = createDb(c.env.DB)
+    const before = await loadEnv(db, actor.orgId, id)
     const now = new Date().toISOString()
 
     await writeAudited(
-      c.env.DB,
+      db,
       [
-        c.env.DB.prepare(
-          `UPDATE environments SET deleted_at = ?, updated_at = ? WHERE id = ?`,
-        ).bind(now, now, id),
+        db
+          .update(environmentsTable)
+          .set({ deleted_at: now, updated_at: now })
+          .where(eq(environmentsTable.id, id)),
       ],
       {
         orgId: actor.orgId,

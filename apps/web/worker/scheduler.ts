@@ -3,6 +3,9 @@
 // exactly once even across overlapping ticks, creates a run, and advances
 // `next_due_at`. On-merge schedules are handled by the webhook, not here.
 
+import { and, asc, eq, isNotNull, lte } from 'drizzle-orm'
+import { createDb } from './db/client'
+import { schedules } from './db/schema'
 import type { Env } from './env'
 import { nextDue } from './lib/cron'
 import { createRun } from './lib/run-create'
@@ -26,32 +29,50 @@ export interface SweepResult {
 
 /** Run one cron sweep. `now` is injectable for tests. */
 export async function sweepSchedules(env: Env, now: Date = new Date()): Promise<SweepResult> {
+  const db = createDb(env.DB)
   const nowIso = now.toISOString()
-  const due = await env.DB.prepare(
-    `SELECT id, org_id, project_id, environment_id, flow_selection, engine, profile,
-            cron_expr, next_due_at
-       FROM schedules
-      WHERE enabled = 1 AND trigger_type = 'cron'
-        AND next_due_at IS NOT NULL AND next_due_at <= ?
-      ORDER BY next_due_at ASC`,
-  )
-    .bind(nowIso)
-    .all<DueRow>()
+  const due = await db
+    .select({
+      id: schedules.id,
+      org_id: schedules.org_id,
+      project_id: schedules.project_id,
+      environment_id: schedules.environment_id,
+      flow_selection: schedules.flow_selection,
+      engine: schedules.engine,
+      profile: schedules.profile,
+      cron_expr: schedules.cron_expr,
+      next_due_at: schedules.next_due_at,
+    })
+    .from(schedules)
+    .where(
+      and(
+        eq(schedules.enabled, 1),
+        eq(schedules.trigger_type, 'cron'),
+        isNotNull(schedules.next_due_at),
+        lte(schedules.next_due_at, nowIso),
+      ),
+    )
+    .orderBy(asc(schedules.next_due_at))
 
   const fired: string[] = []
   const runs: string[] = []
 
-  for (const s of due.results) {
+  for (const s of due) {
     const advanced = s.cron_expr ? (nextDue(s.cron_expr, now)?.toISOString() ?? null) : null
 
     // Claim atomically: only the invocation that still sees the observed
     // next_due_at advances it. `changes === 1` means we won the tick.
-    const claim = await env.DB.prepare(
-      `UPDATE schedules SET last_fired_at = ?, next_due_at = ?, updated_at = ?
-         WHERE id = ? AND next_due_at = ? AND enabled = 1`,
-    )
-      .bind(nowIso, advanced, nowIso, s.id, s.next_due_at)
-      .run()
+    const claim = await db
+      .update(schedules)
+      .set({ last_fired_at: nowIso, next_due_at: advanced, updated_at: nowIso })
+      .where(
+        and(
+          eq(schedules.id, s.id),
+          // Non-null: the `due` query filters on isNotNull(next_due_at).
+          eq(schedules.next_due_at, s.next_due_at as string),
+          eq(schedules.enabled, 1),
+        ),
+      )
     if (claim.meta.changes !== 1) continue // another invocation already fired it
     fired.push(s.id)
 

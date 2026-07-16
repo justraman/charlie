@@ -5,6 +5,9 @@
 // enqueue. The only differences between triggers are the `trigger` label, the
 // actor, and the optional commit/schedule attribution.
 
+import { and, eq, isNotNull, isNull } from 'drizzle-orm'
+import { createDb, type Db } from '../db/client'
+import { environments, flows, projects, runs } from '../db/schema'
 import type { Env } from '../env'
 import type { ActorKind } from './audit'
 import { writeAudited } from './audit'
@@ -25,31 +28,37 @@ export interface FlowSelection {
 }
 
 /** Resolve a project by id or slug within the org (live only). */
-export async function resolveProject(db: D1Database, orgId: string, ref: string): Promise<string> {
+export async function resolveProject(db: Db, orgId: string, ref: string): Promise<string> {
   const byId = UUID_RE.test(ref)
   const row = await db
-    .prepare(
-      `SELECT id FROM projects WHERE org_id = ? AND ${byId ? 'id' : 'slug'} = ? AND deleted_at IS NULL`,
+    .select({ id: projects.id })
+    .from(projects)
+    .where(
+      and(
+        eq(projects.org_id, orgId),
+        eq(byId ? projects.id : projects.slug, ref),
+        isNull(projects.deleted_at),
+      ),
     )
-    .bind(orgId, ref)
-    .first<{ id: string }>()
+    .get()
   if (!row) throw new HttpError('bad_request', `Unknown project: ${ref}`)
   return row.id
 }
 
 /** Resolve an environment by id or name within the project (live only). */
-export async function resolveEnvironment(
-  db: D1Database,
-  projectId: string,
-  ref: string,
-): Promise<string> {
+export async function resolveEnvironment(db: Db, projectId: string, ref: string): Promise<string> {
   const byId = UUID_RE.test(ref)
   const row = await db
-    .prepare(
-      `SELECT id FROM environments WHERE project_id = ? AND ${byId ? 'id' : 'name'} = ? AND deleted_at IS NULL`,
+    .select({ id: environments.id })
+    .from(environments)
+    .where(
+      and(
+        eq(environments.project_id, projectId),
+        eq(byId ? environments.id : environments.name, ref),
+        isNull(environments.deleted_at),
+      ),
     )
-    .bind(projectId, ref)
-    .first<{ id: string }>()
+    .get()
   if (!row) throw new HttpError('bad_request', `Unknown environment: ${ref}`)
   return row.id
 }
@@ -60,24 +69,32 @@ export async function resolveEnvironment(
  * declare support for the engine survive; an empty result is a 400.
  */
 export async function resolveFlows(
-  db: D1Database,
+  db: Db,
   projectId: string,
   engine: string,
   names: string[] | undefined,
 ): Promise<FlowSelection[]> {
   const all = !names || names.length === 0 || names.includes('all')
   const rows = await db
-    .prepare(
-      `SELECT id, name, current_version_id, engines FROM flows
-         WHERE project_id = ? AND deleted_at IS NULL AND current_version_id IS NOT NULL`,
+    .select({
+      id: flows.id,
+      name: flows.name,
+      current_version_id: flows.current_version_id,
+      engines: flows.engines,
+    })
+    .from(flows)
+    .where(
+      and(
+        eq(flows.project_id, projectId),
+        isNull(flows.deleted_at),
+        isNotNull(flows.current_version_id),
+      ),
     )
-    .bind(projectId)
-    .all<{ id: string; name: string; current_version_id: string; engines: string }>()
 
-  let selected = rows.results
+  let selected = rows
   if (!all) {
     const want = new Set(names)
-    selected = rows.results.filter((r) => want.has(r.name))
+    selected = rows.filter((r) => want.has(r.name))
     const found = new Set(selected.map((r) => r.name))
     const missing = [...(want as Set<string>)].filter((n) => !found.has(n))
     if (missing.length) throw new HttpError('bad_request', `Unknown flow(s): ${missing.join(', ')}`)
@@ -91,7 +108,12 @@ export async function resolveFlows(
   })
   if (selected.length === 0)
     throw new HttpError('bad_request', `No flows support engine "${engine}"`)
-  return selected.map((r) => ({ flowId: r.id, versionId: r.current_version_id, name: r.name }))
+  // current_version_id is guaranteed non-null by the isNotNull filter above.
+  return selected.map((r) => ({
+    flowId: r.id,
+    versionId: r.current_version_id as string,
+    name: r.name,
+  }))
 }
 
 /** E2E splits flows across browser shards; k6 uses one job × many VUs. */
@@ -138,7 +160,7 @@ export interface CreateRunResult {
  * Coordinator DO, and enqueue dispatch. Throws HttpError on bad references.
  */
 export async function createRun(env: Env, params: CreateRunParams): Promise<CreateRunResult> {
-  const db = env.DB
+  const db = createDb(env.DB)
   const projectId = await resolveProject(db, params.orgId, params.project)
   const environmentId = await resolveEnvironment(db, projectId, params.environment)
   const flowSelection = await resolveFlows(db, projectId, params.engine, params.flows)
@@ -151,29 +173,23 @@ export async function createRun(env: Env, params: CreateRunParams): Promise<Crea
   await writeAudited(
     db,
     [
-      db
-        .prepare(
-          `INSERT INTO runs
-           (id, org_id, project_id, environment_id, flow_selection, engine, profile, status,
-            trigger, triggered_by, expected_shards, commit_sha, schedule_id, slack_channel, queued_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          runId,
-          params.orgId,
-          projectId,
-          environmentId,
-          JSON.stringify(flowSelection),
-          params.engine,
-          profile,
-          params.trigger,
-          params.triggeredBy ?? null,
-          expectedShards,
-          params.commitSha ?? null,
-          params.scheduleId ?? null,
-          params.slackChannel ?? null,
-          now,
-        ),
+      db.insert(runs).values({
+        id: runId,
+        org_id: params.orgId,
+        project_id: projectId,
+        environment_id: environmentId,
+        flow_selection: JSON.stringify(flowSelection),
+        engine: params.engine,
+        profile,
+        status: 'queued',
+        trigger: params.trigger,
+        triggered_by: params.triggeredBy ?? null,
+        expected_shards: expectedShards,
+        commit_sha: params.commitSha ?? null,
+        schedule_id: params.scheduleId ?? null,
+        slack_channel: params.slackChannel ?? null,
+        queued_at: now,
+      }),
     ],
     {
       orgId: params.orgId,

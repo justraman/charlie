@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
+import { createDb } from '../db/client'
 import type { AppBindings } from '../env'
 
 const health = new Hono<AppBindings>()
@@ -7,7 +9,7 @@ const health = new Hono<AppBindings>()
 health.get('/', async (c) => {
   let db: 'ok' | 'error' = 'ok'
   try {
-    await c.env.DB.prepare('SELECT 1').first()
+    await createDb(c.env.DB).run(sql`select 1`)
   } catch {
     db = 'error'
   }

@@ -3,7 +3,11 @@
 // at-rest scheme as environment secrets, and likewise never returned to a
 // client (routes expose only presence + non-secret hints).
 
+import { and, eq, sql } from 'drizzle-orm'
+import { createDb, type Db } from '../db/client'
+import { integrations } from '../db/schema'
 import type { Env } from '../env'
+import type { Mutation } from './audit'
 import { decryptString, encryptString } from './crypto'
 import { uuidv7 } from './ids'
 
@@ -15,23 +19,18 @@ export interface SlackConfig {
   signingSecret: string
 }
 
-interface IntegrationRow {
-  id: string
-  external_id: string | null
-  config_ciphertext: string
-}
-
 /** Load and decrypt an integration's config, or null if not connected. */
 export async function getIntegrationConfig<T = SlackConfig>(
   env: Env,
   orgId: string,
   kind: IntegrationKind,
 ): Promise<T | null> {
-  const row = await env.DB.prepare(
-    `SELECT id, external_id, config_ciphertext FROM integrations WHERE org_id = ? AND kind = ?`,
-  )
-    .bind(orgId, kind)
-    .first<IntegrationRow>()
+  const db = createDb(env.DB)
+  const row = await db
+    .select({ config_ciphertext: integrations.config_ciphertext })
+    .from(integrations)
+    .where(and(eq(integrations.org_id, orgId), eq(integrations.kind, kind)))
+    .get()
   if (!row) return null
   const json = await decryptString(row.config_ciphertext, env.CHARLIE_KEK ?? '')
   return JSON.parse(json) as T
@@ -47,13 +46,21 @@ export async function resolveSlackIntegration(
   env: Env,
   teamId: string | null,
 ): Promise<{ orgId: string; config: SlackConfig } | null> {
-  const row = await env.DB.prepare(
-    `SELECT org_id, config_ciphertext FROM integrations
-       WHERE kind = 'slack' AND (external_id = ? OR external_id IS NULL OR ? IS NULL)
-       ORDER BY (external_id = ?) DESC LIMIT 1`,
-  )
-    .bind(teamId, teamId, teamId)
-    .first<{ org_id: string; config_ciphertext: string }>()
+  const db = createDb(env.DB)
+  const row = await db
+    .select({
+      org_id: integrations.org_id,
+      config_ciphertext: integrations.config_ciphertext,
+    })
+    .from(integrations)
+    // Prefer an exact team-id match, but a single-org self-host may have stored
+    // the integration with no external_id, and inbound requests may lack one.
+    .where(
+      sql`${integrations.kind} = 'slack' and (${integrations.external_id} = ${teamId} or ${integrations.external_id} is null or ${teamId} is null)`,
+    )
+    .orderBy(sql`(${integrations.external_id} = ${teamId}) desc`)
+    .limit(1)
+    .get()
   if (!row) return null
   const config = JSON.parse(
     await decryptString(row.config_ciphertext, env.CHARLIE_KEK ?? ''),
@@ -67,11 +74,12 @@ export async function integrationStatus(
   orgId: string,
   kind: IntegrationKind,
 ): Promise<{ connected: boolean; externalId: string | null; updatedAt: string | null }> {
-  const row = await env.DB.prepare(
-    `SELECT external_id, updated_at FROM integrations WHERE org_id = ? AND kind = ?`,
-  )
-    .bind(orgId, kind)
-    .first<{ external_id: string | null; updated_at: string }>()
+  const db = createDb(env.DB)
+  const row = await db
+    .select({ external_id: integrations.external_id, updated_at: integrations.updated_at })
+    .from(integrations)
+    .where(and(eq(integrations.org_id, orgId), eq(integrations.kind, kind)))
+    .get()
   return {
     connected: !!row,
     externalId: row?.external_id ?? null,
@@ -79,44 +87,55 @@ export async function integrationStatus(
   }
 }
 
-/** Upsert an integration's encrypted config (one per org+kind). Returns a
- *  prepared statement so the caller can commit it with an audit row. */
-export async function upsertIntegrationStatement(
-  env: Env,
+/** Encrypt an integration's config JSON with CHARLIE_KEK (async, so it runs
+ *  before building the — necessarily synchronous — upsert statement). */
+export function encryptIntegrationConfig(env: Env, config: unknown): Promise<string> {
+  return encryptString(JSON.stringify(config), env.CHARLIE_KEK ?? '')
+}
+
+/**
+ * Upsert an integration's encrypted config (one per org+kind). Returns an
+ * unexecuted Drizzle statement so the caller can commit it in one batch with an
+ * audit row. Synchronous by contract: a Drizzle builder is a thenable, so
+ * returning one from an `async` function would execute it immediately — hence
+ * the ciphertext is computed by the caller via `encryptIntegrationConfig`.
+ */
+export function upsertIntegrationStatement(
+  db: Db,
   params: {
     orgId: string
     kind: IntegrationKind
     externalId: string | null
-    config: unknown
+    configCiphertext: string
     createdBy: string | null
   },
-): Promise<D1PreparedStatement> {
-  const ciphertext = await encryptString(JSON.stringify(params.config), env.CHARLIE_KEK ?? '')
+): Mutation {
   const now = new Date().toISOString()
-  return env.DB.prepare(
-    `INSERT INTO integrations (id, org_id, kind, external_id, config_ciphertext, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(org_id, kind) DO UPDATE SET
-       external_id = excluded.external_id,
-       config_ciphertext = excluded.config_ciphertext,
-       updated_at = excluded.updated_at`,
-  ).bind(
-    uuidv7(),
-    params.orgId,
-    params.kind,
-    params.externalId,
-    ciphertext,
-    params.createdBy,
-    now,
-    now,
-  )
+  return db
+    .insert(integrations)
+    .values({
+      id: uuidv7(),
+      org_id: params.orgId,
+      kind: params.kind,
+      external_id: params.externalId,
+      config_ciphertext: params.configCiphertext,
+      created_by: params.createdBy,
+      created_at: now,
+      updated_at: now,
+    })
+    .onConflictDoUpdate({
+      target: [integrations.org_id, integrations.kind],
+      set: {
+        external_id: sql`excluded.external_id`,
+        config_ciphertext: sql`excluded.config_ciphertext`,
+        updated_at: sql`excluded.updated_at`,
+      },
+    })
 }
 
 /** Delete statement for disconnecting an integration. */
-export function deleteIntegrationStatement(
-  env: Env,
-  orgId: string,
-  kind: IntegrationKind,
-): D1PreparedStatement {
-  return env.DB.prepare(`DELETE FROM integrations WHERE org_id = ? AND kind = ?`).bind(orgId, kind)
+export function deleteIntegrationStatement(db: Db, orgId: string, kind: IntegrationKind): Mutation {
+  return db
+    .delete(integrations)
+    .where(and(eq(integrations.org_id, orgId), eq(integrations.kind, kind)))
 }

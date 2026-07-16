@@ -5,9 +5,12 @@
 // contract; malformed model output is rejected, never stored blind.
 
 import { flowDraftArraySchema } from '@charlie/flow-core'
+import { and, eq, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import { z } from 'zod'
+import { createDb } from '../db/client'
+import { ai_analyses, ai_providers, flow_drafts, organization, projects } from '../db/schema'
 import type { AppBindings } from '../env'
 import { bearerToken } from '../lib/apikeys'
 import { writeAudited } from '../lib/audit'
@@ -53,13 +56,20 @@ ai.post(
   async (c) => {
     const actor = c.get('auth')
     const projectId = c.req.param('id')
+    const db = createDb(c.env.DB)
     const body = (await c.req.json().catch(() => ({}))) as z.infer<typeof analyzeSchema>
 
-    const project = await c.env.DB.prepare(
-      `SELECT source_repo FROM projects WHERE id = ? AND org_id = ? AND deleted_at IS NULL`,
-    )
-      .bind(projectId, actor.orgId)
-      .first<{ source_repo: string | null }>()
+    const project = await db
+      .select({ source_repo: projects.source_repo })
+      .from(projects)
+      .where(
+        and(
+          eq(projects.id, projectId),
+          eq(projects.org_id, actor.orgId),
+          isNull(projects.deleted_at),
+        ),
+      )
+      .get()
     if (!project) throw new HttpError('not_found', 'Project not found')
     if (!project.source_repo) {
       throw new HttpError('bad_request', 'Project has no source_repo to analyze')
@@ -68,39 +78,37 @@ ai.post(
     // Provider: explicit, else the org default.
     let providerId = body.providerId
     if (!providerId) {
-      const org = await c.env.DB.prepare(
-        `SELECT default_ai_provider_id FROM organization WHERE id = ?`,
-      )
-        .bind(actor.orgId)
-        .first<{ default_ai_provider_id: string | null }>()
+      const org = await db
+        .select({ default_ai_provider_id: organization.default_ai_provider_id })
+        .from(organization)
+        .where(eq(organization.id, actor.orgId))
+        .get()
       providerId = org?.default_ai_provider_id ?? undefined
     }
     if (!providerId) throw new HttpError('bad_request', 'No AI provider configured')
-    const provider = await c.env.DB.prepare(
-      `SELECT id FROM ai_providers WHERE id = ? AND org_id = ?`,
-    )
-      .bind(providerId, actor.orgId)
-      .first<{ id: string }>()
+    const provider = await db
+      .select({ id: ai_providers.id })
+      .from(ai_providers)
+      .where(and(eq(ai_providers.id, providerId), eq(ai_providers.org_id, actor.orgId)))
+      .get()
     if (!provider) throw new HttpError('bad_request', 'Unknown AI provider')
 
     const analysisId = uuidv7()
     const now = new Date().toISOString()
 
     await writeAudited(
-      c.env.DB,
+      db,
       [
-        c.env.DB.prepare(
-          `INSERT INTO ai_analyses (id, org_id, project_id, provider_id, ref, status, created_by, created_at)
-             VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`,
-        ).bind(
-          analysisId,
-          actor.orgId,
-          projectId,
-          providerId,
-          body.ref ?? null,
-          actor.actorId,
-          now,
-        ),
+        db.insert(ai_analyses).values({
+          id: analysisId,
+          org_id: actor.orgId,
+          project_id: projectId,
+          provider_id: providerId,
+          ref: body.ref ?? null,
+          status: 'queued',
+          created_by: actor.actorId,
+          created_at: now,
+        }),
       ],
       {
         orgId: actor.orgId,
@@ -138,16 +146,20 @@ ai.post(
           if (!ghaRunId) await new Promise((r) => setTimeout(r, 1500))
         }
         if (ghaRunId) {
-          await c.env.DB.prepare(`UPDATE ai_analyses SET gha_run_id = ? WHERE id = ?`)
-            .bind(ghaRunId, analysisId)
-            .run()
+          await db
+            .update(ai_analyses)
+            .set({ gha_run_id: ghaRunId })
+            .where(eq(ai_analyses.id, analysisId))
         }
       } catch (err) {
-        await c.env.DB.prepare(
-          `UPDATE ai_analyses SET status = 'failed', error = ?, finished_at = ? WHERE id = ?`,
-        )
-          .bind(`dispatch failed: ${(err as Error).message}`, new Date().toISOString(), analysisId)
-          .run()
+        await db
+          .update(ai_analyses)
+          .set({
+            status: 'failed',
+            error: `dispatch failed: ${(err as Error).message}`,
+            finished_at: new Date().toISOString(),
+          })
+          .where(eq(ai_analyses.id, analysisId))
         throw new HttpError('internal', 'Failed to dispatch analysis')
       }
     }
@@ -159,21 +171,20 @@ ai.post(
 // --- GET /api/analyses/:id/config (analysis token) — job pulls its config ---
 ai.get('/analyses/:id/config', analysisTokenAuth(), async (c) => {
   const analysisId = c.get('runId')
-  const row = await c.env.DB.prepare(
-    `SELECT a.ref, p.source_repo, pr.name AS provider_name, pr.model, pr.api_key_ciphertext
-       FROM ai_analyses a
-       JOIN projects p ON p.id = a.project_id
-       LEFT JOIN ai_providers pr ON pr.id = a.provider_id
-      WHERE a.id = ?`,
-  )
-    .bind(analysisId)
-    .first<{
-      ref: string | null
-      source_repo: string | null
-      provider_name: string | null
-      model: string | null
-      api_key_ciphertext: string | null
-    }>()
+  const db = createDb(c.env.DB)
+  const row = await db
+    .select({
+      ref: ai_analyses.ref,
+      source_repo: projects.source_repo,
+      provider_name: ai_providers.name,
+      model: ai_providers.model,
+      api_key_ciphertext: ai_providers.api_key_ciphertext,
+    })
+    .from(ai_analyses)
+    .innerJoin(projects, eq(projects.id, ai_analyses.project_id))
+    .leftJoin(ai_providers, eq(ai_providers.id, ai_analyses.provider_id))
+    .where(eq(ai_analyses.id, analysisId))
+    .get()
   if (!row) throw new HttpError('not_found', 'Analysis not found')
 
   // Credentials cross into the compute plane here (like a run bundle's secrets).
@@ -190,11 +201,10 @@ ai.get('/analyses/:id/config', analysisTokenAuth(), async (c) => {
   }
 
   // Mark running on first pickup.
-  await c.env.DB.prepare(
-    `UPDATE ai_analyses SET status = 'running' WHERE id = ? AND status = 'queued'`,
-  )
-    .bind(analysisId)
-    .run()
+  await db
+    .update(ai_analyses)
+    .set({ status: 'running' })
+    .where(and(eq(ai_analyses.id, analysisId), eq(ai_analyses.status, 'queued')))
 
   return c.json({
     analysisId,
@@ -207,9 +217,12 @@ ai.get('/analyses/:id/config', analysisTokenAuth(), async (c) => {
 // --- POST /api/analyses/:id/drafts (analysis token) — ingest drafts ---------
 ai.post('/analyses/:id/drafts', analysisTokenAuth(), async (c) => {
   const analysisId = c.get('runId')
-  const analysis = await c.env.DB.prepare(`SELECT org_id, project_id FROM ai_analyses WHERE id = ?`)
-    .bind(analysisId)
-    .first<{ org_id: string; project_id: string }>()
+  const db = createDb(c.env.DB)
+  const analysis = await db
+    .select({ org_id: ai_analyses.org_id, project_id: ai_analyses.project_id })
+    .from(ai_analyses)
+    .where(eq(ai_analyses.id, analysisId))
+    .get()
   if (!analysis) throw new HttpError('not_found', 'Analysis not found')
 
   const raw = await c.req.json().catch(() => null)
@@ -220,34 +233,32 @@ ai.post('/analyses/:id/drafts', analysisTokenAuth(), async (c) => {
   const drafts = parsed.data
   const now = new Date().toISOString()
 
-  const statements = drafts.map((d) =>
-    c.env.DB.prepare(
-      `INSERT INTO flow_drafts
-         (id, org_id, project_id, analysis_id, name, description, engines, steps, load_profile,
-          reasoning, source_refs, status, origin, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'ai', ?, ?)`,
-    ).bind(
-      uuidv7(),
-      analysis.org_id,
-      analysis.project_id,
-      analysisId,
-      d.name,
-      d.description ?? null,
-      JSON.stringify(d.engines),
-      JSON.stringify(d.steps),
-      d.loadProfile ? JSON.stringify(d.loadProfile) : null,
-      d.reasoning ?? null,
-      d.sourceRefs ? JSON.stringify(d.sourceRefs) : null,
-      now,
-      now,
-    ),
+  const inserts = drafts.map((d) =>
+    db.insert(flow_drafts).values({
+      id: uuidv7(),
+      org_id: analysis.org_id,
+      project_id: analysis.project_id,
+      analysis_id: analysisId,
+      name: d.name,
+      description: d.description ?? null,
+      engines: JSON.stringify(d.engines),
+      steps: JSON.stringify(d.steps),
+      load_profile: d.loadProfile ? JSON.stringify(d.loadProfile) : null,
+      reasoning: d.reasoning ?? null,
+      source_refs: d.sourceRefs ? JSON.stringify(d.sourceRefs) : null,
+      status: 'draft',
+      origin: 'ai',
+      created_at: now,
+      updated_at: now,
+    }),
   )
-  statements.push(
-    c.env.DB.prepare(
-      `UPDATE ai_analyses SET status = 'succeeded', draft_count = ?, finished_at = ? WHERE id = ?`,
-    ).bind(drafts.length, now, analysisId),
-  )
-  await c.env.DB.batch(statements)
+  await db.batch([
+    db
+      .update(ai_analyses)
+      .set({ status: 'succeeded', draft_count: drafts.length, finished_at: now })
+      .where(eq(ai_analyses.id, analysisId)),
+    ...inserts,
+  ])
 
   return c.json({ ok: true, stored: drafts.length })
 })

@@ -2,7 +2,10 @@
 // D1 stores SHA-256(token) as the primary key. A D1 leak therefore yields
 // hashes that cannot be replayed as cookies. Sliding expiry (default 7 days).
 
+import { eq } from 'drizzle-orm'
 import type { Role } from '../../shared/roles'
+import type { Db } from '../db/client'
+import { sessions, users } from '../db/schema'
 import { randomToken, sha256Hex } from './crypto'
 
 export const SESSION_COOKIE = 'charlie_session'
@@ -28,7 +31,7 @@ export interface CreatedSession {
 }
 
 export async function createSession(
-  db: D1Database,
+  db: Db,
   input: { userId: string; userAgent?: string | null; ip?: string | null; ttlDays?: number },
 ): Promise<CreatedSession> {
   const token = randomToken(32)
@@ -36,26 +39,15 @@ export async function createSession(
   const ttlDays = input.ttlDays ?? DEFAULT_TTL_DAYS
   const now = new Date().toISOString()
   const expiresAt = isoIn(ttlDays)
-  await db
-    .prepare(
-      `INSERT INTO sessions (id, user_id, user_agent, ip, expires_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(id, input.userId, input.userAgent ?? null, input.ip ?? null, expiresAt, now)
-    .run()
+  await db.insert(sessions).values({
+    id,
+    user_id: input.userId,
+    user_agent: input.userAgent ?? null,
+    ip: input.ip ?? null,
+    expires_at: expiresAt,
+    created_at: now,
+  })
   return { token, expiresAt, maxAgeSec: ttlDays * 86400 }
-}
-
-interface SessionRow {
-  session_id: string
-  expires_at: string
-  user_id: string
-  email: string
-  name: string | null
-  avatar_url: string | null
-  role: Role
-  org_id: string
-  deleted_at: string | null
 }
 
 /**
@@ -64,21 +56,26 @@ interface SessionRow {
  * pushes `expires_at` forward.
  */
 export async function resolveSession(
-  db: D1Database,
+  db: Db,
   token: string,
   ttlDays = DEFAULT_TTL_DAYS,
 ): Promise<SessionUser | null> {
   const id = await sha256Hex(token)
   const row = await db
-    .prepare(
-      `SELECT s.id AS session_id, s.expires_at, u.id AS user_id, u.email, u.name,
-              u.avatar_url, u.role, u.org_id, u.deleted_at
-         FROM sessions s
-         JOIN users u ON u.id = s.user_id
-        WHERE s.id = ?`,
-    )
-    .bind(id)
-    .first<SessionRow>()
+    .select({
+      expires_at: sessions.expires_at,
+      user_id: users.id,
+      email: users.email,
+      name: users.name,
+      avatar_url: users.avatar_url,
+      role: users.role,
+      org_id: users.org_id,
+      deleted_at: users.deleted_at,
+    })
+    .from(sessions)
+    .innerJoin(users, eq(users.id, sessions.user_id))
+    .where(eq(sessions.id, id))
+    .get()
 
   if (!row) return null
   if (row.deleted_at) return null
@@ -89,9 +86,9 @@ export async function resolveSession(
   const halfLife = Date.now() + (ttlDays * 86400_000) / 2
   if (Date.parse(row.expires_at) < halfLife) {
     await db
-      .prepare(`UPDATE sessions SET expires_at = ? WHERE id = ?`)
-      .bind(isoIn(ttlDays), id)
-      .run()
+      .update(sessions)
+      .set({ expires_at: isoIn(ttlDays) })
+      .where(eq(sessions.id, id))
   }
 
   return {
@@ -99,12 +96,12 @@ export async function resolveSession(
     email: row.email,
     name: row.name,
     avatarUrl: row.avatar_url,
-    role: row.role,
+    role: row.role as Role,
     orgId: row.org_id,
   }
 }
 
-export async function destroySession(db: D1Database, token: string): Promise<void> {
+export async function destroySession(db: Db, token: string): Promise<void> {
   const id = await sha256Hex(token)
-  await db.prepare(`DELETE FROM sessions WHERE id = ?`).bind(id).run()
+  await db.delete(sessions).where(eq(sessions.id, id))
 }

@@ -1,5 +1,8 @@
+import { and, desc, eq } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { createDb } from '../db/client'
+import { api_keys } from '../db/schema'
 import type { AppBindings } from '../env'
 import { formatApiKey, generateApiKeySecret } from '../lib/apikeys'
 import { writeAudited } from '../lib/audit'
@@ -44,17 +47,29 @@ function toDto(row: KeyRow) {
   }
 }
 
+// The column set returned to clients — mirrors KeyRow (secret_hash excluded).
+const KEY_COLS = {
+  id: api_keys.id,
+  name: api_keys.name,
+  scopes: api_keys.scopes,
+  project_scope: api_keys.project_scope,
+  expires_at: api_keys.expires_at,
+  last_used_at: api_keys.last_used_at,
+  revoked_at: api_keys.revoked_at,
+  created_at: api_keys.created_at,
+  created_by: api_keys.created_by,
+}
+
 // --- GET /api/api-keys ------------------------------------------------------
 apikeys.get('/', async (c) => {
   const { orgId } = c.get('auth')
-  const rows = await c.env.DB.prepare(
-    `SELECT id, name, scopes, project_scope, expires_at, last_used_at, revoked_at,
-            created_at, created_by
-       FROM api_keys WHERE org_id = ? ORDER BY created_at DESC`,
-  )
-    .bind(orgId)
-    .all<KeyRow>()
-  return c.json({ apiKeys: rows.results.map(toDto) })
+  const db = createDb(c.env.DB)
+  const rows = await db
+    .select(KEY_COLS)
+    .from(api_keys)
+    .where(eq(api_keys.org_id, orgId))
+    .orderBy(desc(api_keys.created_at))
+  return c.json({ apiKeys: rows.map(toDto) })
 })
 
 const createSchema = z.object({
@@ -68,6 +83,7 @@ const createSchema = z.object({
 apikeys.post('/', async (c) => {
   const actor = c.get('auth')
   const body = await parseBody(c, createSchema)
+  const db = createDb(c.env.DB)
 
   const keyId = uuidv7()
   const secret = generateApiKeySecret()
@@ -79,24 +95,19 @@ apikeys.post('/', async (c) => {
   const now = new Date().toISOString()
 
   await writeAudited(
-    c.env.DB,
+    db,
     [
-      c.env.DB.prepare(
-        `INSERT INTO api_keys
-           (id, org_id, name, secret_hash, scopes, project_scope, expires_at,
-            created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        keyId,
-        actor.orgId,
-        body.name,
-        secretHash,
-        scopesJson,
-        projectScopeJson,
-        body.expiresAt ?? null,
-        actor.actorId,
-        now,
-      ),
+      db.insert(api_keys).values({
+        id: keyId,
+        org_id: actor.orgId,
+        name: body.name,
+        secret_hash: secretHash,
+        scopes: scopesJson,
+        project_scope: projectScopeJson,
+        expires_at: body.expiresAt ?? null,
+        created_by: actor.actorId,
+        created_at: now,
+      }),
     ],
     {
       orgId: actor.orgId,
@@ -130,19 +141,20 @@ apikeys.post('/', async (c) => {
 apikeys.delete('/:id', async (c) => {
   const actor = c.get('auth')
   const id = c.req.param('id')
+  const db = createDb(c.env.DB)
 
-  const row = await c.env.DB.prepare(
-    `SELECT id, name, revoked_at FROM api_keys WHERE id = ? AND org_id = ?`,
-  )
-    .bind(id, actor.orgId)
-    .first<{ id: string; name: string; revoked_at: string | null }>()
+  const row = await db
+    .select({ id: api_keys.id, name: api_keys.name, revoked_at: api_keys.revoked_at })
+    .from(api_keys)
+    .where(and(eq(api_keys.id, id), eq(api_keys.org_id, actor.orgId)))
+    .get()
   if (!row) throw new HttpError('not_found', 'API key not found')
   if (row.revoked_at) return c.json({ ok: true }) // already revoked
 
   const now = new Date().toISOString()
   await writeAudited(
-    c.env.DB,
-    [c.env.DB.prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ?`).bind(now, id)],
+    db,
+    [db.update(api_keys).set({ revoked_at: now }).where(eq(api_keys.id, id))],
     {
       orgId: actor.orgId,
       actorId: actor.actorId,

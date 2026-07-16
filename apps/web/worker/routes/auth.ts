@@ -1,5 +1,8 @@
+import { eq, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
+import { createDb, type Db } from '../db/client'
+import { users } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudit } from '../lib/audit'
 import { randomToken } from '../lib/crypto'
@@ -109,7 +112,8 @@ auth.get('/google/callback', async (c) => {
     return c.redirect('/login?error=email_unverified', 302)
   }
 
-  const org = await ensureOrganization(c.env.DB, {
+  const db = createDb(c.env.DB)
+  const org = await ensureOrganization(db, {
     name: c.env.ORG_NAME ?? 'Charlie',
     domainsCsv: c.env.ALLOWED_EMAIL_DOMAINS ?? '',
   })
@@ -117,7 +121,7 @@ auth.get('/google/callback', async (c) => {
   // Domain gate — the primary tenancy boundary in single-org mode.
   const domain = emailDomain(identity.email)
   if (!org.allowedEmailDomains.includes(domain)) {
-    await writeAudit(c.env.DB, {
+    await writeAudit(db, {
       orgId: org.id,
       actorId: null,
       actorKind: 'system',
@@ -131,16 +135,16 @@ auth.get('/google/callback', async (c) => {
     return c.redirect('/login?error=domain_not_allowed', 302)
   }
 
-  const user = await upsertUser(c.env.DB, org, identity)
+  const user = await upsertUser(db, org, identity)
 
-  const session = await createSession(c.env.DB, {
+  const session = await createSession(db, {
     userId: user.id,
     userAgent: userAgent(c),
     ip: clientIp(c),
   })
   setCookie(c, SESSION_COOKIE, session.token, sessionCookieOptions(c.env, session.maxAgeSec))
 
-  await writeAudit(c.env.DB, {
+  await writeAudit(db, {
     orgId: org.id,
     actorId: user.id,
     actorKind: 'user',
@@ -159,9 +163,10 @@ auth.get('/google/callback', async (c) => {
 auth.post('/logout', authenticate, async (c) => {
   const token = getCookie(c, SESSION_COOKIE)
   const actor = c.get('auth')
-  if (token) await destroySession(c.env.DB, token)
+  const db = createDb(c.env.DB)
+  if (token) await destroySession(db, token)
   deleteCookie(c, SESSION_COOKIE, { path: '/' })
-  await writeAudit(c.env.DB, {
+  await writeAudit(db, {
     orgId: actor.orgId,
     actorId: actor.actorId,
     actorKind: actor.actorKind,
@@ -203,56 +208,54 @@ interface UpsertedUser {
 }
 
 async function upsertUser(
-  db: D1Database,
+  db: Db,
   org: Organization,
   identity: GoogleIdentity,
 ): Promise<UpsertedUser> {
   const now = new Date().toISOString()
   const existing = await db
-    .prepare(`SELECT id, email, role FROM users WHERE google_sub = ?`)
-    .bind(identity.sub)
-    .first<{ id: string; email: string; role: string }>()
+    .select({ id: users.id, email: users.email, role: users.role })
+    .from(users)
+    .where(eq(users.google_sub, identity.sub))
+    .get()
 
   if (existing) {
     await db
-      .prepare(
-        `UPDATE users SET email = ?, name = ?, avatar_url = ?, last_login_at = ?,
-                          updated_at = ?, deleted_at = NULL
-           WHERE id = ?`,
-      )
-      .bind(identity.email, identity.name, identity.picture, now, now, existing.id)
-      .run()
+      .update(users)
+      .set({
+        email: identity.email,
+        name: identity.name,
+        avatar_url: identity.picture,
+        last_login_at: now,
+        updated_at: now,
+        deleted_at: null,
+      })
+      .where(eq(users.id, existing.id))
     return { id: existing.id, email: identity.email, role: existing.role, isFirstUser: false }
   }
 
   // First-ever user in the org becomes owner; everyone else starts as viewer.
   const countRow = await db
-    .prepare(`SELECT COUNT(*) AS n FROM users WHERE org_id = ?`)
-    .bind(org.id)
-    .first<{ n: number }>()
+    .select({ n: sql<number>`count(*)` })
+    .from(users)
+    .where(eq(users.org_id, org.id))
+    .get()
   const isFirstUser = (countRow?.n ?? 0) === 0
   const role = isFirstUser ? 'owner' : 'viewer'
 
   const id = uuidv7()
-  await db
-    .prepare(
-      `INSERT INTO users (id, org_id, email, name, avatar_url, role, google_sub,
-                          last_login_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      id,
-      org.id,
-      identity.email,
-      identity.name,
-      identity.picture,
-      role,
-      identity.sub,
-      now,
-      now,
-      now,
-    )
-    .run()
+  await db.insert(users).values({
+    id,
+    org_id: org.id,
+    email: identity.email,
+    name: identity.name,
+    avatar_url: identity.picture,
+    role,
+    google_sub: identity.sub,
+    last_login_at: now,
+    created_at: now,
+    updated_at: now,
+  })
   return { id, email: identity.email, role, isFirstUser }
 }
 

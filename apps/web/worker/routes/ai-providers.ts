@@ -3,10 +3,13 @@
 // CHARLIE_KEK and never returned to a client. The org's default provider is
 // organization.default_ai_provider_id.
 
+import { and, asc, eq } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { createDb, type Db } from '../db/client'
+import { ai_providers, organization } from '../db/schema'
 import type { AppBindings } from '../env'
-import { writeAudited } from '../lib/audit'
+import { type Mutation, writeAudited } from '../lib/audit'
 import { encryptString } from '../lib/crypto'
 import { clientIp, HttpError, userAgent } from '../lib/http'
 import { uuidv7 } from '../lib/ids'
@@ -26,11 +29,12 @@ interface ProviderRow {
   updated_at: string
 }
 
-async function defaultProviderId(db: D1Database, orgId: string): Promise<string | null> {
+async function defaultProviderId(db: Db, orgId: string): Promise<string | null> {
   const row = await db
-    .prepare(`SELECT default_ai_provider_id FROM organization WHERE id = ?`)
-    .bind(orgId)
-    .first<{ default_ai_provider_id: string | null }>()
+    .select({ default_ai_provider_id: organization.default_ai_provider_id })
+    .from(organization)
+    .where(eq(organization.id, orgId))
+    .get()
   return row?.default_ai_provider_id ?? null
 }
 
@@ -46,14 +50,23 @@ function toDto(row: ProviderRow, defaultId: string | null) {
   }
 }
 
-async function loadProvider(db: D1Database, orgId: string, id: string): Promise<ProviderRow> {
+// The column set loaded server-side; `api_key_ciphertext` is used only to derive
+// `hasKey` in toDto and is never returned to a client.
+const PROVIDER_COLS = {
+  id: ai_providers.id,
+  name: ai_providers.name,
+  model: ai_providers.model,
+  api_key_ciphertext: ai_providers.api_key_ciphertext,
+  created_at: ai_providers.created_at,
+  updated_at: ai_providers.updated_at,
+}
+
+async function loadProvider(db: Db, orgId: string, id: string): Promise<ProviderRow> {
   const row = await db
-    .prepare(
-      `SELECT id, name, model, api_key_ciphertext, created_at, updated_at
-         FROM ai_providers WHERE id = ? AND org_id = ?`,
-    )
-    .bind(id, orgId)
-    .first<ProviderRow>()
+    .select(PROVIDER_COLS)
+    .from(ai_providers)
+    .where(and(eq(ai_providers.id, id), eq(ai_providers.org_id, orgId)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Provider not found')
   return row
 }
@@ -61,15 +74,15 @@ async function loadProvider(db: D1Database, orgId: string, id: string): Promise<
 // --- GET /api/ai-providers (viewer) — list, no secrets ----------------------
 aiProviders.get('/', authorize({ capability: 'projects.view' }), async (c) => {
   const { orgId } = c.get('auth')
-  const defaultId = await defaultProviderId(c.env.DB, orgId)
-  const rows = await c.env.DB.prepare(
-    `SELECT id, name, model, api_key_ciphertext, created_at, updated_at
-       FROM ai_providers WHERE org_id = ? ORDER BY created_at ASC`,
-  )
-    .bind(orgId)
-    .all<ProviderRow>()
+  const db = createDb(c.env.DB)
+  const defaultId = await defaultProviderId(db, orgId)
+  const rows = await db
+    .select(PROVIDER_COLS)
+    .from(ai_providers)
+    .where(eq(ai_providers.org_id, orgId))
+    .orderBy(asc(ai_providers.created_at))
   return c.json({
-    providers: rows.results.map((r) => toDto(r, defaultId)),
+    providers: rows.map((r) => toDto(r, defaultId)),
     defaultProviderId: defaultId,
   })
 })
@@ -85,6 +98,7 @@ const createSchema = z.object({
 // --- POST /api/ai-providers (admin) — add -----------------------------------
 aiProviders.post('/', authorize({ capability: 'integrations.manage' }), async (c) => {
   const actor = c.get('auth')
+  const db = createDb(c.env.DB)
   const body = await parseBody(c, createSchema)
   // Non-Workers-AI providers require a key.
   if (body.name !== 'workers_ai' && !body.apiKey) {
@@ -100,25 +114,31 @@ aiProviders.post('/', authorize({ capability: 'integrations.manage' }), async (c
         )
       : null
 
-  const existingDefault = await defaultProviderId(c.env.DB, actor.orgId)
+  const existingDefault = await defaultProviderId(db, actor.orgId)
   const makeDefault = body.makeDefault || !existingDefault
 
-  const statements = [
-    c.env.DB.prepare(
-      `INSERT INTO ai_providers (id, org_id, name, model, api_key_ciphertext, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(id, actor.orgId, body.name, body.model, ciphertext, actor.actorId, now, now),
+  const statements: Mutation[] = [
+    db.insert(ai_providers).values({
+      id,
+      org_id: actor.orgId,
+      name: body.name,
+      model: body.model,
+      api_key_ciphertext: ciphertext,
+      created_by: actor.actorId,
+      created_at: now,
+      updated_at: now,
+    }),
   ]
   if (makeDefault) {
     statements.push(
-      c.env.DB.prepare(`UPDATE organization SET default_ai_provider_id = ? WHERE id = ?`).bind(
-        id,
-        actor.orgId,
-      ),
+      db
+        .update(organization)
+        .set({ default_ai_provider_id: id })
+        .where(eq(organization.id, actor.orgId)),
     )
   }
 
-  await writeAudited(c.env.DB, statements, {
+  await writeAudited(db, statements, {
     orgId: actor.orgId,
     actorId: actor.actorId,
     actorKind: actor.actorKind,
@@ -131,7 +151,7 @@ aiProviders.post('/', authorize({ capability: 'integrations.manage' }), async (c
     userAgent: userAgent(c),
   })
 
-  const row = await loadProvider(c.env.DB, actor.orgId, id)
+  const row = await loadProvider(db, actor.orgId, id)
   return c.json({ provider: toDto(row, makeDefault ? id : existingDefault) }, 201)
 })
 
@@ -145,7 +165,8 @@ const patchSchema = z.object({
 // --- PATCH /api/ai-providers/:id (admin) ------------------------------------
 aiProviders.patch('/:id', authorize({ capability: 'integrations.manage' }), async (c) => {
   const actor = c.get('auth')
-  const existing = await loadProvider(c.env.DB, actor.orgId, c.req.param('id'))
+  const db = createDb(c.env.DB)
+  const existing = await loadProvider(db, actor.orgId, c.req.param('id'))
   const body = await parseBody(c, patchSchema)
   const now = new Date().toISOString()
 
@@ -157,21 +178,22 @@ aiProviders.patch('/:id', authorize({ capability: 'integrations.manage' }), asyn
         )
       : existing.api_key_ciphertext
 
-  const statements = [
-    c.env.DB.prepare(
-      `UPDATE ai_providers SET model = ?, api_key_ciphertext = ?, updated_at = ? WHERE id = ?`,
-    ).bind(body.model ?? existing.model, ciphertext, now, existing.id),
+  const statements: Mutation[] = [
+    db
+      .update(ai_providers)
+      .set({ model: body.model ?? existing.model, api_key_ciphertext: ciphertext, updated_at: now })
+      .where(eq(ai_providers.id, existing.id)),
   ]
   if (body.makeDefault) {
     statements.push(
-      c.env.DB.prepare(`UPDATE organization SET default_ai_provider_id = ? WHERE id = ?`).bind(
-        existing.id,
-        actor.orgId,
-      ),
+      db
+        .update(organization)
+        .set({ default_ai_provider_id: existing.id })
+        .where(eq(organization.id, actor.orgId)),
     )
   }
 
-  await writeAudited(c.env.DB, statements, {
+  await writeAudited(db, statements, {
     orgId: actor.orgId,
     actorId: actor.actorId,
     actorKind: actor.actorKind,
@@ -183,27 +205,29 @@ aiProviders.patch('/:id', authorize({ capability: 'integrations.manage' }), asyn
     userAgent: userAgent(c),
   })
 
-  const defaultId = await defaultProviderId(c.env.DB, actor.orgId)
-  const row = await loadProvider(c.env.DB, actor.orgId, existing.id)
+  const defaultId = await defaultProviderId(db, actor.orgId)
+  const row = await loadProvider(db, actor.orgId, existing.id)
   return c.json({ provider: toDto(row, defaultId) })
 })
 
 // --- DELETE /api/ai-providers/:id (admin) -----------------------------------
 aiProviders.delete('/:id', authorize({ capability: 'integrations.manage' }), async (c) => {
   const actor = c.get('auth')
-  const existing = await loadProvider(c.env.DB, actor.orgId, c.req.param('id'))
-  const wasDefault = (await defaultProviderId(c.env.DB, actor.orgId)) === existing.id
+  const db = createDb(c.env.DB)
+  const existing = await loadProvider(db, actor.orgId, c.req.param('id'))
+  const wasDefault = (await defaultProviderId(db, actor.orgId)) === existing.id
 
-  const statements = [c.env.DB.prepare(`DELETE FROM ai_providers WHERE id = ?`).bind(existing.id)]
+  const statements: Mutation[] = [db.delete(ai_providers).where(eq(ai_providers.id, existing.id))]
   if (wasDefault) {
     statements.push(
-      c.env.DB.prepare(`UPDATE organization SET default_ai_provider_id = NULL WHERE id = ?`).bind(
-        actor.orgId,
-      ),
+      db
+        .update(organization)
+        .set({ default_ai_provider_id: null })
+        .where(eq(organization.id, actor.orgId)),
     )
   }
 
-  await writeAudited(c.env.DB, statements, {
+  await writeAudited(db, statements, {
     orgId: actor.orgId,
     actorId: actor.actorId,
     actorKind: actor.actorKind,

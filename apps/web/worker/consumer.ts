@@ -2,28 +2,29 @@
 // from POST /api/runs so the request returns immediately and dispatch gets
 // retries/backpressure for free.
 
+import { and, eq } from 'drizzle-orm'
+import { createDb } from './db/client'
+import { runs } from './db/schema'
 import type { Env } from './env'
 import { dispatchWorkflow, githubConfigured, resolveRunId } from './lib/github'
 import { callRunDO } from './lib/run-do'
 import { runTokenSecret, signRunToken } from './lib/run-token'
 
-interface DispatchRow {
-  id: string
-  project_id: string
-  environment_id: string
-  engine: string
-  profile: string
-  expected_shards: number
-  status: string
-}
-
 export async function dispatchRun(env: Env, runId: string): Promise<void> {
-  const run = await env.DB.prepare(
-    `SELECT id, project_id, environment_id, engine, profile, expected_shards, status
-       FROM runs WHERE id = ?`,
-  )
-    .bind(runId)
-    .first<DispatchRow>()
+  const db = createDb(env.DB)
+  const run = await db
+    .select({
+      id: runs.id,
+      project_id: runs.project_id,
+      environment_id: runs.environment_id,
+      engine: runs.engine,
+      profile: runs.profile,
+      expected_shards: runs.expected_shards,
+      status: runs.status,
+    })
+    .from(runs)
+    .where(eq(runs.id, runId))
+    .get()
   if (!run) return
   if (run.status !== 'queued') return // already dispatched, cancelled, or done
 
@@ -55,19 +56,19 @@ export async function dispatchRun(env: Env, runId: string): Promise<void> {
       if (!ghaRunId) await new Promise((r) => setTimeout(r, 1500))
     }
     if (ghaRunId) {
-      await env.DB.prepare(`UPDATE runs SET gha_run_id = ? WHERE id = ?`)
-        .bind(ghaRunId, runId)
-        .run()
+      await db.update(runs).set({ gha_run_id: ghaRunId }).where(eq(runs.id, runId))
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`[dispatch] failed for run ${runId}:`, message)
-    await env.DB.prepare(
-      `UPDATE runs SET status = 'failed', error = ?, finished_at = ?
-         WHERE id = ? AND status = 'queued'`,
-    )
-      .bind(`dispatch failed: ${message}`, new Date().toISOString(), runId)
-      .run()
+    await db
+      .update(runs)
+      .set({
+        status: 'failed',
+        error: `dispatch failed: ${message}`,
+        finished_at: new Date().toISOString(),
+      })
+      .where(and(eq(runs.id, runId), eq(runs.status, 'queued')))
     // Close the DO so any SSE clients see the terminal state.
     await callRunDO(env, runId, '/cancel', { method: 'POST' }).catch(() => {})
     throw err // let the queue retry (idempotent: status guard above)

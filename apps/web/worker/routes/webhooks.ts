@@ -7,7 +7,10 @@
 // Mounted at /webhooks (outside /api) — no session auth; the HMAC signature is
 // the authentication.
 
+import { and, eq, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
+import { createDb } from '../db/client'
+import { projects, schedules } from '../db/schema'
 import type { AppBindings } from '../env'
 import { HttpError } from '../lib/http'
 import { createRun } from '../lib/run-create'
@@ -87,18 +90,30 @@ webhooks.post('/github', async (c) => {
   if (!merge) return c.json({ ok: true, matched: 0, ignored: event })
 
   // on_merge schedules whose project watches this repo+branch.
-  const matches = await c.env.DB.prepare(
-    `SELECT s.id, s.org_id, s.project_id, s.environment_id, s.flow_selection, s.engine, s.profile
-       FROM schedules s
-       JOIN projects p ON p.id = s.project_id AND p.deleted_at IS NULL
-      WHERE s.trigger_type = 'on_merge' AND s.enabled = 1
-        AND s.watch_branch = ? AND p.source_repo = ?`,
-  )
-    .bind(merge.branch, merge.repo)
-    .all<MatchRow>()
+  const db = createDb(c.env.DB)
+  const matches = await db
+    .select({
+      id: schedules.id,
+      org_id: schedules.org_id,
+      project_id: schedules.project_id,
+      environment_id: schedules.environment_id,
+      flow_selection: schedules.flow_selection,
+      engine: schedules.engine,
+      profile: schedules.profile,
+    })
+    .from(schedules)
+    .innerJoin(projects, and(eq(projects.id, schedules.project_id), isNull(projects.deleted_at)))
+    .where(
+      and(
+        eq(schedules.trigger_type, 'on_merge'),
+        eq(schedules.enabled, 1),
+        eq(schedules.watch_branch, merge.branch),
+        eq(projects.source_repo, merge.repo),
+      ),
+    )
 
   const created: string[] = []
-  for (const m of matches.results) {
+  for (const m of matches) {
     try {
       const result = await createRun(c.env, {
         orgId: m.org_id,

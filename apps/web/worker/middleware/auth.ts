@@ -1,10 +1,13 @@
 // The single protected-route middleware chain: authenticate → authorize →
 // rate-limit. Every /api route that isn't explicitly public composes these.
 
+import { eq } from 'drizzle-orm'
 import { getCookie } from 'hono/cookie'
 import { createMiddleware } from 'hono/factory'
 import type { Capability } from '../../shared/roles'
 import { roleHasCapability } from '../../shared/roles'
+import { createDb } from '../db/client'
+import { api_keys } from '../db/schema'
 import type { AppBindings } from '../env'
 import { bearerToken, parseApiKey } from '../lib/apikeys'
 import { constantTimeEqual, sha256Hex } from '../lib/crypto'
@@ -12,25 +15,16 @@ import { clientIp, HttpError } from '../lib/http'
 import { rateLimit } from '../lib/ratelimit'
 import { resolveSession, SESSION_COOKIE } from '../lib/session'
 
-interface ApiKeyRow {
-  id: string
-  org_id: string
-  secret_hash: string
-  scopes: string
-  project_scope: string | null
-  expires_at: string | null
-  revoked_at: string | null
-}
-
 /**
  * Authenticate the caller from a session cookie (humans) or a Bearer API key
  * (machines) and stash the resolved actor on the context. 401 if neither
  * credential is present or valid.
  */
 export const authenticate = createMiddleware<AppBindings>(async (c, next) => {
+  const db = createDb(c.env.DB)
   const cookieToken = getCookie(c, SESSION_COOKIE)
   if (cookieToken) {
-    const user = await resolveSession(c.env.DB, cookieToken)
+    const user = await resolveSession(db, cookieToken)
     if (user) {
       c.set('auth', {
         actorKind: 'user',
@@ -47,12 +41,19 @@ export const authenticate = createMiddleware<AppBindings>(async (c, next) => {
     const parsed = parseApiKey(token)
     if (!parsed) throw new HttpError('unauthenticated', 'Malformed API key')
 
-    const row = await c.env.DB.prepare(
-      `SELECT id, org_id, secret_hash, scopes, project_scope, expires_at, revoked_at
-         FROM api_keys WHERE id = ?`,
-    )
-      .bind(parsed.keyId)
-      .first<ApiKeyRow>()
+    const row = await db
+      .select({
+        id: api_keys.id,
+        org_id: api_keys.org_id,
+        secret_hash: api_keys.secret_hash,
+        scopes: api_keys.scopes,
+        project_scope: api_keys.project_scope,
+        expires_at: api_keys.expires_at,
+        revoked_at: api_keys.revoked_at,
+      })
+      .from(api_keys)
+      .where(eq(api_keys.id, parsed.keyId))
+      .get()
 
     if (!row) throw new HttpError('unauthenticated', 'Unknown API key')
     if (row.revoked_at) throw new HttpError('unauthenticated', 'API key revoked')
@@ -67,9 +68,12 @@ export const authenticate = createMiddleware<AppBindings>(async (c, next) => {
 
     // Record last use without blocking the response.
     c.executionCtx.waitUntil(
-      c.env.DB.prepare(`UPDATE api_keys SET last_used_at = ? WHERE id = ?`)
-        .bind(new Date().toISOString(), row.id)
-        .run(),
+      Promise.resolve(
+        db
+          .update(api_keys)
+          .set({ last_used_at: new Date().toISOString() })
+          .where(eq(api_keys.id, row.id)),
+      ),
     )
 
     c.set('auth', {

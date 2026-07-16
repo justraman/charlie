@@ -5,6 +5,9 @@
 // completion writes the terminal report to D1.
 
 import { DurableObject } from 'cloudflare:workers'
+import { and, eq, notInArray, sql } from 'drizzle-orm'
+import { createDb } from '../db/client'
+import { environments, projects, reports, run_shards, runs, shard_results } from '../db/schema'
 import type { Env } from '../env'
 import { uuidv7 } from '../lib/ids'
 import { getIntegrationConfig } from '../lib/integrations'
@@ -174,53 +177,54 @@ export class RunCoordinator extends DurableObject<Env> {
     if (!meta) return new Response('run not initialized', { status: 409 })
     if (meta.terminal) return Response.json({ ok: true, terminal: true })
 
+    const db = createDb(this.env.DB)
     const now = new Date().toISOString()
     // First check-in flips the run to running.
     const firstActivity = !meta.startedAt
     if (firstActivity) {
       meta.startedAt = now
-      await this.env.DB.prepare(
-        `UPDATE runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'`,
-      )
-        .bind(now, meta.runId)
-        .run()
+      await db
+        .update(runs)
+        .set({ status: 'running', started_at: now })
+        .where(and(eq(runs.id, meta.runId), eq(runs.status, 'queued')))
     }
 
     // Persist shard + result rows in D1.
     const shardRowId = uuidv7()
-    await this.env.DB.batch([
-      this.env.DB.prepare(
-        `INSERT INTO run_shards (id, run_id, shard_index, status, runner, public_ip, started_at, finished_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(run_id, shard_index) DO UPDATE SET
-           status = excluded.status, runner = excluded.runner,
-           public_ip = excluded.public_ip, finished_at = excluded.finished_at`,
-      ).bind(
-        shardRowId,
-        meta.runId,
-        payload.shardIndex,
-        payload.status,
-        payload.runner ?? null,
-        payload.publicIp ?? null,
-        meta.startedAt ?? now,
-        now,
-      ),
-      this.env.DB.prepare(
-        `INSERT INTO shard_results
-           (id, run_id, shard_id, flow_results, metrics, runtime_issues, events, artifact_keys, created_at)
-         VALUES (?, ?, (SELECT id FROM run_shards WHERE run_id = ? AND shard_index = ?), ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        uuidv7(),
-        meta.runId,
-        meta.runId,
-        payload.shardIndex,
-        JSON.stringify(payload.flowResults ?? []),
-        payload.metrics != null ? JSON.stringify(payload.metrics) : null,
-        payload.runtimeIssues != null ? JSON.stringify(payload.runtimeIssues) : null,
-        payload.events != null ? JSON.stringify(payload.events) : null,
-        JSON.stringify(payload.artifactKeys ?? []),
-        now,
-      ),
+    await db.batch([
+      db
+        .insert(run_shards)
+        .values({
+          id: shardRowId,
+          run_id: meta.runId,
+          shard_index: payload.shardIndex,
+          status: payload.status,
+          runner: payload.runner ?? null,
+          public_ip: payload.publicIp ?? null,
+          started_at: meta.startedAt ?? now,
+          finished_at: now,
+        })
+        .onConflictDoUpdate({
+          target: [run_shards.run_id, run_shards.shard_index],
+          set: {
+            status: sql`excluded.status`,
+            runner: sql`excluded.runner`,
+            public_ip: sql`excluded.public_ip`,
+            finished_at: sql`excluded.finished_at`,
+          },
+        }),
+      db.insert(shard_results).values({
+        id: uuidv7(),
+        run_id: meta.runId,
+        shard_id: sql`(SELECT ${run_shards.id} FROM ${run_shards} WHERE ${run_shards.run_id} = ${meta.runId} AND ${run_shards.shard_index} = ${payload.shardIndex})`,
+        flow_results: JSON.stringify(payload.flowResults ?? []),
+        metrics: payload.metrics != null ? JSON.stringify(payload.metrics) : null,
+        runtime_issues:
+          payload.runtimeIssues != null ? JSON.stringify(payload.runtimeIssues) : null,
+        events: payload.events != null ? JSON.stringify(payload.events) : null,
+        artifact_keys: JSON.stringify(payload.artifactKeys ?? []),
+        created_at: now,
+      }),
     ])
 
     meta.shards[payload.shardIndex] = payload.status
@@ -288,12 +292,12 @@ export class RunCoordinator extends DurableObject<Env> {
     const failedShards = statuses.length - passedShards
     const runStatus: RunStatus = failedShards === 0 ? 'passed' : 'failed'
 
+    const db = createDb(this.env.DB)
     // Pull both the per-flow results (E2E) and metrics (k6) from every shard.
-    const rows = await this.env.DB.prepare(
-      `SELECT flow_results, metrics FROM shard_results WHERE run_id = ?`,
-    )
-      .bind(meta.runId)
-      .all<{ flow_results: string | null; metrics: string | null }>()
+    const rows = await db
+      .select({ flow_results: shard_results.flow_results, metrics: shard_results.metrics })
+      .from(shard_results)
+      .where(eq(shard_results.run_id, meta.runId))
 
     const totals = {
       shardsPassed: passedShards,
@@ -306,10 +310,10 @@ export class RunCoordinator extends DurableObject<Env> {
     let e2eSummary: Record<string, unknown> | null = null
     let loadSummary: Record<string, unknown> | null = null
     if (meta.engine === 'k6') {
-      loadSummary = aggregateLoad(rows.results)
+      loadSummary = aggregateLoad(rows)
     } else {
       const flows: FlowResultEntry[] = []
-      for (const r of rows.results) {
+      for (const r of rows) {
         try {
           flows.push(...(JSON.parse(r.flow_results ?? '[]') as FlowResultEntry[]))
         } catch {
@@ -328,36 +332,49 @@ export class RunCoordinator extends DurableObject<Env> {
 
     const denormalized = { ...totals, ...(loadSummary ?? e2eSummary ?? {}) }
 
-    await this.env.DB.batch([
-      this.env.DB.prepare(
-        `INSERT INTO reports (id, run_id, status, totals, e2e_summary, load_summary, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(run_id) DO UPDATE SET
-           status = excluded.status, totals = excluded.totals,
-           e2e_summary = excluded.e2e_summary, load_summary = excluded.load_summary`,
-      ).bind(
-        uuidv7(),
-        meta.runId,
-        runStatus,
-        JSON.stringify(totals),
-        e2eSummary ? JSON.stringify(e2eSummary) : null,
-        loadSummary ? JSON.stringify(loadSummary) : null,
-        nowIso,
-      ),
-      this.env.DB.prepare(
-        `UPDATE runs SET status = ?, finished_at = ?, error = ?, summary = ? WHERE id = ?`,
-      ).bind(runStatus, nowIso, reason ?? null, JSON.stringify(denormalized), meta.runId),
+    await db.batch([
+      db
+        .insert(reports)
+        .values({
+          id: uuidv7(),
+          run_id: meta.runId,
+          status: runStatus,
+          totals: JSON.stringify(totals),
+          e2e_summary: e2eSummary ? JSON.stringify(e2eSummary) : null,
+          load_summary: loadSummary ? JSON.stringify(loadSummary) : null,
+          created_at: nowIso,
+        })
+        .onConflictDoUpdate({
+          target: reports.run_id,
+          set: {
+            status: sql`excluded.status`,
+            totals: sql`excluded.totals`,
+            e2e_summary: sql`excluded.e2e_summary`,
+            load_summary: sql`excluded.load_summary`,
+          },
+        }),
+      db
+        .update(runs)
+        .set({
+          status: runStatus,
+          finished_at: nowIso,
+          error: reason ?? null,
+          summary: JSON.stringify(denormalized),
+        })
+        .where(eq(runs.id, meta.runId)),
     ])
 
     await this.markTerminal(meta, runStatus)
   }
 
   private async closeRun(meta: Meta, status: RunStatus, nowIso: string): Promise<void> {
-    await this.env.DB.prepare(
-      `UPDATE runs SET status = ?, finished_at = ? WHERE id = ? AND status NOT IN ('passed','failed','cancelled')`,
-    )
-      .bind(status, nowIso, meta.runId)
-      .run()
+    const db = createDb(this.env.DB)
+    await db
+      .update(runs)
+      .set({ status, finished_at: nowIso })
+      .where(
+        and(eq(runs.id, meta.runId), notInArray(runs.status, ['passed', 'failed', 'cancelled'])),
+      )
     await this.markTerminal(meta, status)
   }
 
@@ -384,26 +401,23 @@ export class RunCoordinator extends DurableObject<Env> {
    * when Slack isn't connected or no channel applies.
    */
   private async notifySlack(meta: Meta, status: RunStatus): Promise<void> {
-    const run = await this.env.DB.prepare(
-      `SELECT r.slack_channel, r.engine, r.profile, r.summary, r.error,
-              p.name AS project_name, p.slack_channel AS project_channel,
-              e.name AS env_name
-         FROM runs r
-         JOIN projects p ON p.id = r.project_id
-         JOIN environments e ON e.id = r.environment_id
-        WHERE r.id = ?`,
-    )
-      .bind(meta.runId)
-      .first<{
-        slack_channel: string | null
-        engine: string
-        profile: string
-        summary: string | null
-        error: string | null
-        project_name: string
-        project_channel: string | null
-        env_name: string
-      }>()
+    const db = createDb(this.env.DB)
+    const run = await db
+      .select({
+        slack_channel: runs.slack_channel,
+        engine: runs.engine,
+        profile: runs.profile,
+        summary: runs.summary,
+        error: runs.error,
+        project_name: projects.name,
+        project_channel: projects.slack_channel,
+        env_name: environments.name,
+      })
+      .from(runs)
+      .innerJoin(projects, eq(projects.id, runs.project_id))
+      .innerJoin(environments, eq(environments.id, runs.environment_id))
+      .where(eq(runs.id, meta.runId))
+      .get()
     if (!run) return
 
     const channel = run.slack_channel ?? run.project_channel

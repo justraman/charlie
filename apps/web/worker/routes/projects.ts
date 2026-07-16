@@ -1,5 +1,8 @@
+import { and, desc, eq, isNull } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { createDb, type Db } from '../db/client'
+import { environments, projects } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { clientIp, HttpError, userAgent } from '../lib/http'
@@ -8,9 +11,9 @@ import { slugify } from '../lib/slug'
 import { parseBody } from '../lib/validate'
 import { authenticate, authorize } from '../middleware/auth'
 
-const projects = new Hono<AppBindings>()
+const projectsRoute = new Hono<AppBindings>()
 
-projects.use('*', authenticate)
+projectsRoute.use('*', authenticate)
 
 interface ProjectRow {
   id: string
@@ -40,45 +43,58 @@ function toDto(row: ProjectRow) {
   }
 }
 
-const PROJECT_COLS =
-  'id, name, slug, description, source_repo, default_environment_id, slack_channel, created_by, created_at, updated_at'
+// The column set returned to clients — mirrors ProjectRow (secrets/soft-delete
+// columns are intentionally excluded).
+const PROJECT_COLS = {
+  id: projects.id,
+  name: projects.name,
+  slug: projects.slug,
+  description: projects.description,
+  source_repo: projects.source_repo,
+  default_environment_id: projects.default_environment_id,
+  slack_channel: projects.slack_channel,
+  created_by: projects.created_by,
+  created_at: projects.created_at,
+  updated_at: projects.updated_at,
+}
 
-async function loadProject(db: D1Database, orgId: string, id: string): Promise<ProjectRow> {
+async function loadProject(db: Db, orgId: string, id: string): Promise<ProjectRow> {
   const row = await db
-    .prepare(
-      `SELECT ${PROJECT_COLS} FROM projects WHERE id = ? AND org_id = ? AND deleted_at IS NULL`,
-    )
-    .bind(id, orgId)
-    .first<ProjectRow>()
+    .select(PROJECT_COLS)
+    .from(projects)
+    .where(and(eq(projects.id, id), eq(projects.org_id, orgId), isNull(projects.deleted_at)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Project not found')
   return row
 }
 
-async function uniqueSlug(db: D1Database, orgId: string, base: string): Promise<string> {
+async function uniqueSlug(db: Db, orgId: string, base: string): Promise<string> {
   const root = base || 'project'
   for (let attempt = 0; attempt < 50; attempt++) {
     const candidate = attempt === 0 ? root : `${root}-${attempt + 1}`
     const clash = await db
-      .prepare(
-        `SELECT 1 FROM projects WHERE org_id = ? AND slug = ? AND deleted_at IS NULL LIMIT 1`,
+      .select({ id: projects.id })
+      .from(projects)
+      .where(
+        and(eq(projects.org_id, orgId), eq(projects.slug, candidate), isNull(projects.deleted_at)),
       )
-      .bind(orgId, candidate)
-      .first()
+      .limit(1)
+      .get()
     if (!clash) return candidate
   }
   return `${root}-${uuidv7().slice(0, 8)}`
 }
 
 // --- GET /api/projects (viewer) ---------------------------------------------
-projects.get('/', authorize({ capability: 'projects.view' }), async (c) => {
+projectsRoute.get('/', authorize({ capability: 'projects.view' }), async (c) => {
   const { orgId } = c.get('auth')
-  const rows = await c.env.DB.prepare(
-    `SELECT ${PROJECT_COLS} FROM projects
-       WHERE org_id = ? AND deleted_at IS NULL ORDER BY created_at DESC`,
-  )
-    .bind(orgId)
-    .all<ProjectRow>()
-  return c.json({ projects: rows.results.map(toDto) })
+  const db = createDb(c.env.DB)
+  const rows = await db
+    .select(PROJECT_COLS)
+    .from(projects)
+    .where(and(eq(projects.org_id, orgId), isNull(projects.deleted_at)))
+    .orderBy(desc(projects.created_at))
+  return c.json({ projects: rows.map(toDto) })
 })
 
 const createSchema = z.object({
@@ -92,31 +108,28 @@ const createSchema = z.object({
 })
 
 // --- POST /api/projects (editor) --------------------------------------------
-projects.post('/', authorize({ capability: 'flows.write' }), async (c) => {
+projectsRoute.post('/', authorize({ capability: 'flows.write' }), async (c) => {
   const actor = c.get('auth')
+  const db = createDb(c.env.DB)
   const body = await parseBody(c, createSchema)
-  const slug = await uniqueSlug(c.env.DB, actor.orgId, slugify(body.slug ?? body.name))
+  const slug = await uniqueSlug(db, actor.orgId, slugify(body.slug ?? body.name))
   const id = uuidv7()
   const now = new Date().toISOString()
 
   await writeAudited(
-    c.env.DB,
+    db,
     [
-      c.env.DB.prepare(
-        `INSERT INTO projects
-           (id, org_id, name, slug, description, source_repo, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
+      db.insert(projects).values({
         id,
-        actor.orgId,
-        body.name,
+        org_id: actor.orgId,
+        name: body.name,
         slug,
-        body.description ?? null,
-        body.sourceRepo ?? null,
-        actor.actorId,
-        now,
-        now,
-      ),
+        description: body.description ?? null,
+        source_repo: body.sourceRepo ?? null,
+        created_by: actor.actorId,
+        created_at: now,
+        updated_at: now,
+      }),
     ],
     {
       orgId: actor.orgId,
@@ -131,14 +144,15 @@ projects.post('/', authorize({ capability: 'flows.write' }), async (c) => {
     },
   )
 
-  const row = await loadProject(c.env.DB, actor.orgId, id)
+  const row = await loadProject(db, actor.orgId, id)
   return c.json({ project: toDto(row) }, 201)
 })
 
 // --- GET /api/projects/:id (viewer) -----------------------------------------
-projects.get('/:id', authorize({ capability: 'projects.view' }), async (c) => {
+projectsRoute.get('/:id', authorize({ capability: 'projects.view' }), async (c) => {
   const { orgId } = c.get('auth')
-  const row = await loadProject(c.env.DB, orgId, c.req.param('id'))
+  const db = createDb(c.env.DB)
+  const row = await loadProject(db, orgId, c.req.param('id'))
   return c.json({ project: toDto(row) })
 })
 
@@ -156,19 +170,26 @@ const patchSchema = z
   .refine((b) => Object.keys(b).length > 0, { message: 'no fields to update' })
 
 // --- PATCH /api/projects/:id (editor) ---------------------------------------
-projects.patch('/:id', authorize({ capability: 'flows.write' }), async (c) => {
+projectsRoute.patch('/:id', authorize({ capability: 'flows.write' }), async (c) => {
   const actor = c.get('auth')
   const id = c.req.param('id')
+  const db = createDb(c.env.DB)
   const body = await parseBody(c, patchSchema)
-  const before = await loadProject(c.env.DB, actor.orgId, id)
+  const before = await loadProject(db, actor.orgId, id)
 
   // If a default environment is named, it must belong to this project.
   if (body.defaultEnvironmentId) {
-    const env = await c.env.DB.prepare(
-      `SELECT 1 FROM environments WHERE id = ? AND project_id = ? AND deleted_at IS NULL`,
-    )
-      .bind(body.defaultEnvironmentId, id)
-      .first()
+    const env = await db
+      .select({ id: environments.id })
+      .from(environments)
+      .where(
+        and(
+          eq(environments.id, body.defaultEnvironmentId),
+          eq(environments.project_id, id),
+          isNull(environments.deleted_at),
+        ),
+      )
+      .get()
     if (!env)
       throw new HttpError(
         'bad_request',
@@ -189,21 +210,19 @@ projects.patch('/:id', authorize({ capability: 'flows.write' }), async (c) => {
   }
 
   await writeAudited(
-    c.env.DB,
+    db,
     [
-      c.env.DB.prepare(
-        `UPDATE projects SET name = ?, description = ?, source_repo = ?,
-                             default_environment_id = ?, slack_channel = ?, updated_at = ?
-           WHERE id = ?`,
-      ).bind(
-        next.name,
-        next.description,
-        next.source_repo,
-        next.default_environment_id,
-        next.slack_channel,
-        now,
-        id,
-      ),
+      db
+        .update(projects)
+        .set({
+          name: next.name,
+          description: next.description,
+          source_repo: next.source_repo,
+          default_environment_id: next.default_environment_id,
+          slack_channel: next.slack_channel,
+          updated_at: now,
+        })
+        .where(eq(projects.id, id)),
     ],
     {
       orgId: actor.orgId,
@@ -223,26 +242,21 @@ projects.patch('/:id', authorize({ capability: 'flows.write' }), async (c) => {
     },
   )
 
-  const row = await loadProject(c.env.DB, actor.orgId, id)
+  const row = await loadProject(db, actor.orgId, id)
   return c.json({ project: toDto(row) })
 })
 
 // --- DELETE /api/projects/:id (admin) — soft delete -------------------------
-projects.delete('/:id', authorize({ capability: 'projects.delete' }), async (c) => {
+projectsRoute.delete('/:id', authorize({ capability: 'projects.delete' }), async (c) => {
   const actor = c.get('auth')
   const id = c.req.param('id')
-  const before = await loadProject(c.env.DB, actor.orgId, id)
+  const db = createDb(c.env.DB)
+  const before = await loadProject(db, actor.orgId, id)
   const now = new Date().toISOString()
 
   await writeAudited(
-    c.env.DB,
-    [
-      c.env.DB.prepare(`UPDATE projects SET deleted_at = ?, updated_at = ? WHERE id = ?`).bind(
-        now,
-        now,
-        id,
-      ),
-    ],
+    db,
+    [db.update(projects).set({ deleted_at: now, updated_at: now }).where(eq(projects.id, id))],
     {
       orgId: actor.orgId,
       actorId: actor.actorId,
@@ -260,5 +274,5 @@ projects.delete('/:id', authorize({ capability: 'projects.delete' }), async (c) 
   return c.json({ ok: true })
 })
 
-export default projects
+export default projectsRoute
 export { loadProject }

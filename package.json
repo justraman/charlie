@@ -16,10 +16,12 @@
     "test": "nx run-many -t test",
     "affected": "nx affected -t typecheck test build",
     "graph": "nx graph",
+    "db:generate": "bun run --cwd apps/web db:generate",
     "db:migrate:local": "bun run --cwd apps/web db:migrate:local",
     "db:migrate:remote": "bun run --cwd apps/web db:migrate:remote"
   },
   "dependencies": {
+    "drizzle-orm": "0.45.2",
     "esbuild": "^0.28.1",
     "hono": "^4.12.30",
     "jose": "^6.2.3",
@@ -37,6 +39,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "concurrently": "^9.1.2",
+    "drizzle-kit": "0.31.10",
     "nx": "^23.1.0",
     "typescript": "^5.7.3",
     "vite": "^8.1.5",

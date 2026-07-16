@@ -4,8 +4,11 @@
 // the real work asynchronously, posting the outcome via the command's
 // response_url. See docs/SLACK.md.
 
+import { and, desc, eq, isNull, or } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { roleHasCapability } from '../../shared/roles'
+import { createDb } from '../db/client'
+import { projects, runs, users } from '../db/schema'
 import type { AppBindings, Env } from '../env'
 import { writeAudit } from '../lib/audit'
 import { HttpError } from '../lib/http'
@@ -28,11 +31,15 @@ interface CharlieUser {
 }
 
 async function userByEmail(env: Env, orgId: string, email: string): Promise<CharlieUser | null> {
-  return env.DB.prepare(
-    `SELECT id, role, email FROM users WHERE org_id = ? AND email = ? AND deleted_at IS NULL`,
-  )
-    .bind(orgId, email.toLowerCase())
-    .first<CharlieUser>()
+  const db = createDb(env.DB)
+  const row = await db
+    .select({ id: users.id, role: users.role, email: users.email })
+    .from(users)
+    .where(
+      and(eq(users.org_id, orgId), eq(users.email, email.toLowerCase()), isNull(users.deleted_at)),
+    )
+    .get()
+  return (row as CharlieUser | undefined) ?? null
 }
 
 // Verify the request and load the org + Slack config. Returns null (caller 401s)
@@ -81,25 +88,32 @@ slack.post('/command', async (c) => {
   }
 
   // status / last are quick DB reads — answer inline.
+  const db = createDb(c.env.DB)
   if (cmd.sub === 'status') {
-    const run = await c.env.DB.prepare(
-      `SELECT status, engine, profile FROM runs WHERE id = ? AND org_id = ?`,
-    )
-      .bind(cmd.runId, integration.orgId)
-      .first<{ status: string; engine: string; profile: string }>()
+    const run = await db
+      .select({ status: runs.status, engine: runs.engine, profile: runs.profile })
+      .from(runs)
+      .where(and(eq(runs.id, cmd.runId!), eq(runs.org_id, integration.orgId)))
+      .get()
     const text = run
       ? `Run \`${cmd.runId}\`: *${run.status}* (${run.engine}${run.engine === 'k6' ? `/${run.profile}` : ''})`
       : `Run \`${cmd.runId}\` not found.`
     return c.json({ response_type: 'ephemeral', text })
   }
   if (cmd.sub === 'last') {
-    const run = await c.env.DB.prepare(
-      `SELECT r.id, r.status, r.engine FROM runs r
-         JOIN projects p ON p.id = r.project_id
-        WHERE p.org_id = ? AND (p.slug = ? OR p.id = ?) ORDER BY r.queued_at DESC LIMIT 1`,
-    )
-      .bind(integration.orgId, cmd.project, cmd.project)
-      .first<{ id: string; status: string; engine: string }>()
+    const run = await db
+      .select({ id: runs.id, status: runs.status, engine: runs.engine })
+      .from(runs)
+      .innerJoin(projects, eq(projects.id, runs.project_id))
+      .where(
+        and(
+          eq(projects.org_id, integration.orgId),
+          or(eq(projects.slug, cmd.project!), eq(projects.id, cmd.project!)),
+        ),
+      )
+      .orderBy(desc(runs.queued_at))
+      .limit(1)
+      .get()
     const text = run
       ? `Last run for *${cmd.project}*: \`${run.id.slice(0, 8)}\` — *${run.status}* (${run.engine})`
       : `No runs found for *${cmd.project}*.`
@@ -154,7 +168,7 @@ async function triggerFromSlack(
       responseUrl,
       `Your role (*${user.role}*) can't trigger runs. Ask an admin for *editor* access.`,
     )
-    await writeAudit(env.DB, {
+    await writeAudit(createDb(env.DB), {
       orgId: integration.orgId,
       actorId: user.id,
       actorKind: 'user',
@@ -241,18 +255,18 @@ async function rerunFromSlack(
     return
   }
 
-  const orig = await env.DB.prepare(
-    `SELECT project_id, environment_id, engine, profile, flow_selection
-       FROM runs WHERE id = ? AND org_id = ?`,
-  )
-    .bind(runId, integration.orgId)
-    .first<{
-      project_id: string
-      environment_id: string
-      engine: string
-      profile: string
-      flow_selection: string
-    }>()
+  const db = createDb(env.DB)
+  const orig = await db
+    .select({
+      project_id: runs.project_id,
+      environment_id: runs.environment_id,
+      engine: runs.engine,
+      profile: runs.profile,
+      flow_selection: runs.flow_selection,
+    })
+    .from(runs)
+    .where(and(eq(runs.id, runId), eq(runs.org_id, integration.orgId)))
+    .get()
   if (!orig) {
     if (responseUrl) await respondUrl(responseUrl, 'Original run not found.')
     return

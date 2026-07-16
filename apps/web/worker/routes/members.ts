@@ -1,6 +1,9 @@
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { ROLE_RANK, ROLES, type Role } from '../../shared/roles'
+import { createDb, type Db } from '../db/client'
+import { sessions, users } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { clientIp, HttpError, userAgent } from '../lib/http'
@@ -36,16 +39,28 @@ function toDto(row: MemberRow) {
   }
 }
 
+// The column set returned to clients — mirrors MemberRow.
+const MEMBER_COLS = {
+  id: users.id,
+  email: users.email,
+  name: users.name,
+  avatar_url: users.avatar_url,
+  role: users.role,
+  last_login_at: users.last_login_at,
+  created_at: users.created_at,
+  deleted_at: users.deleted_at,
+}
+
 // --- GET /api/members -------------------------------------------------------
 members.get('/', async (c) => {
   const { orgId } = c.get('auth')
-  const rows = await c.env.DB.prepare(
-    `SELECT id, email, name, avatar_url, role, last_login_at, created_at, deleted_at
-       FROM users WHERE org_id = ? ORDER BY created_at ASC`,
-  )
-    .bind(orgId)
-    .all<MemberRow>()
-  return c.json({ members: rows.results.map(toDto) })
+  const db = createDb(c.env.DB)
+  const rows = await db
+    .select(MEMBER_COLS)
+    .from(users)
+    .where(eq(users.org_id, orgId))
+    .orderBy(asc(users.created_at))
+  return c.json({ members: rows.map((row) => toDto(row as MemberRow)) })
 })
 
 const patchSchema = z.object({ role: z.enum(ROLES) })
@@ -55,8 +70,9 @@ members.patch('/:id', async (c) => {
   const actor = c.get('auth')
   const targetId = c.req.param('id')
   const { role: newRole } = await parseBody(c, patchSchema)
+  const db = createDb(c.env.DB)
 
-  const target = await loadMember(c.env.DB, actor.orgId, targetId)
+  const target = await loadMember(db, actor.orgId, targetId)
   const actorRole = actor.user?.role ?? 'viewer'
 
   // Only an owner may grant ownership or modify an existing owner.
@@ -71,11 +87,7 @@ members.patch('/:id', async (c) => {
     throw new HttpError('forbidden', 'Cannot modify a member at or above your role')
   }
   // Never strand the org without an owner.
-  if (
-    target.role === 'owner' &&
-    newRole !== 'owner' &&
-    (await ownerCount(c.env.DB, actor.orgId)) <= 1
-  ) {
+  if (target.role === 'owner' && newRole !== 'owner' && (await ownerCount(db, actor.orgId)) <= 1) {
     throw new HttpError('conflict', 'Cannot demote the last owner')
   }
 
@@ -83,14 +95,8 @@ members.patch('/:id', async (c) => {
 
   const now = new Date().toISOString()
   await writeAudited(
-    c.env.DB,
-    [
-      c.env.DB.prepare(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`).bind(
-        newRole,
-        now,
-        targetId,
-      ),
-    ],
+    db,
+    [db.update(users).set({ role: newRole, updated_at: now }).where(eq(users.id, targetId))],
     {
       orgId: actor.orgId,
       actorId: actor.actorId,
@@ -112,12 +118,13 @@ members.patch('/:id', async (c) => {
 members.delete('/:id', async (c) => {
   const actor = c.get('auth')
   const targetId = c.req.param('id')
+  const db = createDb(c.env.DB)
 
   if (targetId === actor.actorId) {
     throw new HttpError('conflict', 'You cannot deactivate your own account')
   }
 
-  const target = await loadMember(c.env.DB, actor.orgId, targetId)
+  const target = await loadMember(db, actor.orgId, targetId)
   const actorRole = actor.user?.role ?? 'viewer'
 
   if (target.role === 'owner') {
@@ -132,15 +139,11 @@ members.delete('/:id', async (c) => {
 
   const now = new Date().toISOString()
   await writeAudited(
-    c.env.DB,
+    db,
     [
       // Deactivate and invalidate their sessions in the same transaction.
-      c.env.DB.prepare(`UPDATE users SET deleted_at = ?, updated_at = ? WHERE id = ?`).bind(
-        now,
-        now,
-        targetId,
-      ),
-      c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(targetId),
+      db.update(users).set({ deleted_at: now, updated_at: now }).where(eq(users.id, targetId)),
+      db.delete(sessions).where(eq(sessions.user_id, targetId)),
     ],
     {
       orgId: actor.orgId,
@@ -159,25 +162,22 @@ members.delete('/:id', async (c) => {
   return c.json({ ok: true })
 })
 
-async function loadMember(db: D1Database, orgId: string, id: string): Promise<MemberRow> {
+async function loadMember(db: Db, orgId: string, id: string): Promise<MemberRow> {
   const row = await db
-    .prepare(
-      `SELECT id, email, name, avatar_url, role, last_login_at, created_at, deleted_at
-         FROM users WHERE id = ? AND org_id = ?`,
-    )
-    .bind(id, orgId)
-    .first<MemberRow>()
+    .select(MEMBER_COLS)
+    .from(users)
+    .where(and(eq(users.id, id), eq(users.org_id, orgId)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Member not found')
-  return row
+  return row as MemberRow
 }
 
-async function ownerCount(db: D1Database, orgId: string): Promise<number> {
+async function ownerCount(db: Db, orgId: string): Promise<number> {
   const row = await db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM users WHERE org_id = ? AND role = 'owner' AND deleted_at IS NULL`,
-    )
-    .bind(orgId)
-    .first<{ n: number }>()
+    .select({ n: sql<number>`count(*)` })
+    .from(users)
+    .where(and(eq(users.org_id, orgId), eq(users.role, 'owner'), isNull(users.deleted_at)))
+    .get()
   return row?.n ?? 0
 }
 

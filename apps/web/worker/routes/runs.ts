@@ -1,5 +1,8 @@
+import { and, asc, desc, eq, type SQL } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { createDb, type Db } from '../db/client'
+import { reports, run_shards, runs as runsTable, shard_results } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { githubConfigured } from '../lib/github'
@@ -58,14 +61,33 @@ function runDto(row: RunRow) {
   }
 }
 
-const RUN_COLS =
-  'id, project_id, environment_id, flow_selection, engine, profile, status, trigger, triggered_by, expected_shards, gha_run_id, commit_sha, error, summary, queued_at, started_at, finished_at'
+// The column set returned to clients — mirrors RunRow.
+const RUN_COLS = {
+  id: runsTable.id,
+  project_id: runsTable.project_id,
+  environment_id: runsTable.environment_id,
+  flow_selection: runsTable.flow_selection,
+  engine: runsTable.engine,
+  profile: runsTable.profile,
+  status: runsTable.status,
+  trigger: runsTable.trigger,
+  triggered_by: runsTable.triggered_by,
+  expected_shards: runsTable.expected_shards,
+  gha_run_id: runsTable.gha_run_id,
+  commit_sha: runsTable.commit_sha,
+  error: runsTable.error,
+  summary: runsTable.summary,
+  queued_at: runsTable.queued_at,
+  started_at: runsTable.started_at,
+  finished_at: runsTable.finished_at,
+}
 
-async function loadRun(db: D1Database, orgId: string, id: string): Promise<RunRow> {
+async function loadRun(db: Db, orgId: string, id: string): Promise<RunRow> {
   const row = await db
-    .prepare(`SELECT ${RUN_COLS} FROM runs WHERE id = ? AND org_id = ?`)
-    .bind(id, orgId)
-    .first<RunRow>()
+    .select(RUN_COLS)
+    .from(runsTable)
+    .where(and(eq(runsTable.id, id), eq(runsTable.org_id, orgId)))
+    .get()
   if (!row) throw new HttpError('not_found', 'Run not found')
   return row
 }
@@ -125,24 +147,19 @@ runs.get(
   authorize({ capability: 'projects.view', scope: 'runs:read' }),
   async (c) => {
     const { orgId } = c.get('auth')
+    const db = createDb(c.env.DB)
     const projectId = c.req.query('project')
     const status = c.req.query('status')
-    const clauses = ['org_id = ?']
-    const binds: unknown[] = [orgId]
-    if (projectId) {
-      clauses.push('project_id = ?')
-      binds.push(projectId)
-    }
-    if (status) {
-      clauses.push('status = ?')
-      binds.push(status)
-    }
-    const rows = await c.env.DB.prepare(
-      `SELECT ${RUN_COLS} FROM runs WHERE ${clauses.join(' AND ')} ORDER BY queued_at DESC LIMIT 100`,
-    )
-      .bind(...binds)
-      .all<RunRow>()
-    return c.json({ runs: rows.results.map(runDto) })
+    const clauses: SQL[] = [eq(runsTable.org_id, orgId)]
+    if (projectId) clauses.push(eq(runsTable.project_id, projectId))
+    if (status) clauses.push(eq(runsTable.status, status))
+    const rows = await db
+      .select(RUN_COLS)
+      .from(runsTable)
+      .where(and(...clauses))
+      .orderBy(desc(runsTable.queued_at))
+      .limit(100)
+    return c.json({ runs: rows.map(runDto) })
   },
 )
 
@@ -153,45 +170,47 @@ runs.get(
   authorize({ capability: 'projects.view', scope: 'runs:read' }),
   async (c) => {
     const { orgId } = c.get('auth')
-    const run = await loadRun(c.env.DB, orgId, c.req.param('id'))
-    const shards = await c.env.DB.prepare(
-      `SELECT shard_index, status, runner, public_ip, started_at, finished_at
-       FROM run_shards WHERE run_id = ? ORDER BY shard_index`,
-    )
-      .bind(run.id)
-      .all<{
-        shard_index: number
-        status: string
-        runner: string | null
-        public_ip: string | null
-        started_at: string | null
-        finished_at: string | null
-      }>()
-    const results = await c.env.DB.prepare(
-      `SELECT rs.shard_index, sr.flow_results, sr.artifact_keys
-       FROM shard_results sr JOIN run_shards rs ON rs.id = sr.shard_id
-      WHERE sr.run_id = ? ORDER BY rs.shard_index`,
-    )
-      .bind(run.id)
-      .all<{ shard_index: number; flow_results: string | null; artifact_keys: string | null }>()
+    const db = createDb(c.env.DB)
+    const run = await loadRun(db, orgId, c.req.param('id'))
+    const shards = await db
+      .select({
+        shard_index: run_shards.shard_index,
+        status: run_shards.status,
+        runner: run_shards.runner,
+        public_ip: run_shards.public_ip,
+        started_at: run_shards.started_at,
+        finished_at: run_shards.finished_at,
+      })
+      .from(run_shards)
+      .where(eq(run_shards.run_id, run.id))
+      .orderBy(asc(run_shards.shard_index))
+    const results = await db
+      .select({
+        shard_index: run_shards.shard_index,
+        flow_results: shard_results.flow_results,
+        artifact_keys: shard_results.artifact_keys,
+      })
+      .from(shard_results)
+      .innerJoin(run_shards, eq(run_shards.id, shard_results.shard_id))
+      .where(eq(shard_results.run_id, run.id))
+      .orderBy(asc(run_shards.shard_index))
 
-    const report = await c.env.DB.prepare(
-      `SELECT status, totals, e2e_summary, load_summary, html_report_key, created_at
-       FROM reports WHERE run_id = ?`,
-    )
-      .bind(run.id)
-      .first<{
-        status: string
-        totals: string | null
-        e2e_summary: string | null
-        load_summary: string | null
-        html_report_key: string | null
-        created_at: string
-      }>()
+    const report = await db
+      .select({
+        status: reports.status,
+        totals: reports.totals,
+        e2e_summary: reports.e2e_summary,
+        load_summary: reports.load_summary,
+        html_report_key: reports.html_report_key,
+        created_at: reports.created_at,
+      })
+      .from(reports)
+      .where(eq(reports.run_id, run.id))
+      .get()
 
     return c.json({
       run: runDto(run),
-      shards: shards.results.map((s) => ({
+      shards: shards.map((s) => ({
         index: s.shard_index,
         status: s.status,
         runner: s.runner,
@@ -199,7 +218,7 @@ runs.get(
         startedAt: s.started_at,
         finishedAt: s.finished_at,
       })),
-      results: results.results.map((r) => ({
+      results: results.map((r) => ({
         shardIndex: r.shard_index,
         flowResults: r.flow_results ? JSON.parse(r.flow_results) : [],
         artifactKeys: r.artifact_keys ? JSON.parse(r.artifact_keys) : [],
@@ -225,7 +244,8 @@ runs.get(
   authorize({ capability: 'projects.view', scope: 'runs:read' }),
   async (c) => {
     const { orgId } = c.get('auth')
-    const run = await loadRun(c.env.DB, orgId, c.req.param('id'))
+    const db = createDb(c.env.DB)
+    const run = await loadRun(db, orgId, c.req.param('id'))
     // Pass the DO's SSE stream straight through to the client.
     return callRunDO(c.env, run.id, '/events', { method: 'GET' })
   },
@@ -238,7 +258,8 @@ runs.get(
   authorize({ capability: 'projects.view', scope: 'reports:read' }),
   async (c) => {
     const { orgId } = c.get('auth')
-    const run = await loadRun(c.env.DB, orgId, c.req.param('id'))
+    const db = createDb(c.env.DB)
+    const run = await loadRun(db, orgId, c.req.param('id'))
     const key = c.req.query('key')
     if (!key || !key.startsWith(`runs/${run.id}/`)) {
       throw new HttpError('bad_request', 'key must belong to this run')
@@ -257,7 +278,8 @@ runs.get(
 // --- POST /api/runs/:id/cancel ----------------------------------------------
 runs.post('/:id/cancel', authenticate, authorize({ capability: 'runs.trigger' }), async (c) => {
   const actor = c.get('auth')
-  const run = await loadRun(c.env.DB, actor.orgId, c.req.param('id'))
+  const db = createDb(c.env.DB)
+  const run = await loadRun(db, actor.orgId, c.req.param('id'))
   if (['passed', 'failed', 'cancelled'].includes(run.status)) {
     throw new HttpError('conflict', `Run already ${run.status}`)
   }
@@ -274,7 +296,7 @@ runs.post('/:id/cancel', authenticate, authorize({ capability: 'runs.trigger' })
 
   await callRunDO(c.env, run.id, '/cancel', { method: 'POST' })
 
-  await writeAudited(c.env.DB, [], {
+  await writeAudited(db, [], {
     orgId: actor.orgId,
     actorId: actor.actorId,
     actorKind: actor.actorKind,

@@ -3,9 +3,12 @@
 // This is the one place environment secrets leave the control plane: the
 // runner fetches a bundle with decrypted secrets to execute the flow.
 
+import { eq } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import { z } from 'zod'
+import { createDb, type Db } from '../db/client'
+import { environments, flow_versions, runs } from '../db/schema'
 import type { AppBindings } from '../env'
 import { bearerToken } from '../lib/apikeys'
 import { HttpError } from '../lib/http'
@@ -46,9 +49,8 @@ function runTokenAuth(opts: { allowTerminal?: boolean } = {}) {
     if (runId !== c.req.param('id')) {
       throw new HttpError('forbidden', 'Run token does not authorize this run')
     }
-    const run = await c.env.DB.prepare(`SELECT status FROM runs WHERE id = ?`)
-      .bind(runId)
-      .first<{ status: string }>()
+    const db = createDb(c.env.DB)
+    const run = await db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get()
     if (!run) throw new HttpError('not_found', 'Run not found')
     if (!opts.allowTerminal && ['passed', 'failed', 'cancelled'].includes(run.status)) {
       throw new HttpError('unauthenticated', 'Run token expired (run is terminal)')
@@ -58,14 +60,21 @@ function runTokenAuth(opts: { allowTerminal?: boolean } = {}) {
   })
 }
 
-async function loadRunForCallback(db: D1Database, runId: string): Promise<RunAuthRow> {
+async function loadRunForCallback(db: Db, runId: string): Promise<RunAuthRow> {
   const run = await db
-    .prepare(
-      `SELECT id, org_id, environment_id, engine, profile, flow_selection, expected_shards, status
-         FROM runs WHERE id = ?`,
-    )
-    .bind(runId)
-    .first<RunAuthRow>()
+    .select({
+      id: runs.id,
+      org_id: runs.org_id,
+      environment_id: runs.environment_id,
+      engine: runs.engine,
+      profile: runs.profile,
+      flow_selection: runs.flow_selection,
+      expected_shards: runs.expected_shards,
+      status: runs.status,
+    })
+    .from(runs)
+    .where(eq(runs.id, runId))
+    .get()
   if (!run) throw new HttpError('not_found', 'Run not found')
   return run
 }
@@ -73,7 +82,8 @@ async function loadRunForCallback(db: D1Database, runId: string): Promise<RunAut
 // --- GET /api/runs/:id/bundle — the runner's fetch-flow ---------------------
 callbacks.get('/runs/:id/bundle', runTokenAuth(), async (c) => {
   const runId = c.get('runId')
-  const run = await loadRunForCallback(c.env.DB, runId)
+  const db = createDb(c.env.DB)
+  const run = await loadRunForCallback(db, runId)
   const selection = JSON.parse(run.flow_selection) as {
     flowId: string
     versionId: string
@@ -82,9 +92,11 @@ callbacks.get('/runs/:id/bundle', runTokenAuth(), async (c) => {
 
   const flows = []
   for (const sel of selection) {
-    const v = await c.env.DB.prepare(`SELECT steps, load_profile FROM flow_versions WHERE id = ?`)
-      .bind(sel.versionId)
-      .first<{ steps: string; load_profile: string | null }>()
+    const v = await db
+      .select({ steps: flow_versions.steps, load_profile: flow_versions.load_profile })
+      .from(flow_versions)
+      .where(eq(flow_versions.id, sel.versionId))
+      .get()
     if (!v) continue
     flows.push({
       flowId: sel.flowId,
@@ -94,16 +106,16 @@ callbacks.get('/runs/:id/bundle', runTokenAuth(), async (c) => {
     })
   }
 
-  const env = await c.env.DB.prepare(
-    `SELECT base_url, headers, secrets_ciphertext, auth_config FROM environments WHERE id = ?`,
-  )
-    .bind(run.environment_id)
-    .first<{
-      base_url: string
-      headers: string
-      secrets_ciphertext: string | null
-      auth_config: string | null
-    }>()
+  const env = await db
+    .select({
+      base_url: environments.base_url,
+      headers: environments.headers,
+      secrets_ciphertext: environments.secrets_ciphertext,
+      auth_config: environments.auth_config,
+    })
+    .from(environments)
+    .where(eq(environments.id, run.environment_id))
+    .get()
   if (!env) throw new HttpError('not_found', 'Environment not found')
 
   // Secrets are decrypted here and cross into the compute plane by design.
