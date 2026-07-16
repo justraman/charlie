@@ -94,3 +94,40 @@ export async function finalize(cfg: RunnerConfig, runId: string): Promise<void> 
     }),
   )
 }
+
+// --- AI analysis callbacks (analysis-token auth) ----------------------------
+
+export interface AnalysisConfig {
+  analysisId: string
+  repo: string | null
+  ref: string | null
+  provider: {
+    name: 'anthropic' | 'openai' | 'workers_ai' | null
+    model: string | null
+    apiKey: string | null
+    accountId: string | null
+  }
+}
+
+export function fetchAnalysisConfig(
+  cfg: RunnerConfig,
+  analysisId: string,
+): Promise<AnalysisConfig> {
+  return fetch(`${cfg.apiUrl}/api/analyses/${analysisId}/config`, {
+    headers: authHeaders(cfg),
+  }).then((r) => okJson<AnalysisConfig>(r))
+}
+
+export async function postDrafts(
+  cfg: RunnerConfig,
+  analysisId: string,
+  drafts: unknown[],
+): Promise<void> {
+  await okJson(
+    await fetch(`${cfg.apiUrl}/api/analyses/${analysisId}/drafts`, {
+      method: 'POST',
+      headers: { ...authHeaders(cfg), 'content-type': 'application/json' },
+      body: JSON.stringify({ drafts }),
+    }),
+  )
+}

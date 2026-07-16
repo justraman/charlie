@@ -85,10 +85,11 @@ export async function dispatchWorkflow(
   env: Env,
   inputs: Record<string, string>,
   deps: GithubDeps = {},
+  workflowFile?: string,
 ): Promise<{ dispatchedAt: string }> {
   const doFetch = deps.fetchImpl ?? fetch
   const token = await getInstallationToken(env, deps)
-  const workflow = env.RUNNER_WORKFLOW_FILE ?? DEFAULT_WORKFLOW
+  const workflow = workflowFile ?? env.RUNNER_WORKFLOW_FILE ?? DEFAULT_WORKFLOW
   const ref = env.GITHUB_RUNNER_REF ?? DEFAULT_REF
   const url = `${GH_API}/repos/${repoOf(env)}/actions/workflows/${workflow}/dispatches`
   const dispatchedAt = new Date((deps.now ?? Date.now)()).toISOString()

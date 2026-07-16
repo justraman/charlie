@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { flowDefinitionSchema, stepSchema } from '../src/schema'
+import {
+  flowDefinitionSchema,
+  flowDraftArraySchema,
+  flowDraftSchema,
+  stepSchema,
+} from '../src/schema'
 
 describe('stepSchema', () => {
   test('accepts each valid action', () => {
@@ -77,5 +82,40 @@ describe('flowDefinitionSchema', () => {
       loadProfile: { profile: 'load', stages: [{ duration: '30sec', target: 1 }] },
     })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('flowDraftSchema', () => {
+  test('accepts a valid AI draft with reasoning and source refs', () => {
+    const r = flowDraftSchema.safeParse({
+      name: 'login',
+      engines: ['playwright'],
+      steps: [
+        { action: 'goto', url: '/login' },
+        { action: 'fill', selector: 'input[name="email"]', value: '{{secrets.TEST_EMAIL}}' },
+        { action: 'submit', selector: 'form' },
+        { action: 'assert', selector: '[data-test=dashboard]', state: 'visible' },
+      ],
+      reasoning: 'Found a login form at /login with email/password fields.',
+      sourceRefs: [{ file: 'src/pages/Login.tsx', route: '/login' }],
+    })
+    expect(r.success).toBe(true)
+  })
+
+  test('defaults engines to playwright', () => {
+    const r = flowDraftSchema.parse({ name: 'x', steps: [{ action: 'goto', url: '/' }] })
+    expect(r.engines).toEqual(['playwright'])
+  })
+
+  test('rejects an unknown step action (malformed model output)', () => {
+    const r = flowDraftSchema.safeParse({
+      name: 'x',
+      steps: [{ action: 'teleport', to: '/x' }],
+    })
+    expect(r.success).toBe(false)
+  })
+
+  test('array validator requires at least one draft', () => {
+    expect(flowDraftArraySchema.safeParse([]).success).toBe(false)
   })
 })

@@ -44,6 +44,7 @@ export interface Env {
   GITHUB_RUNNER_REPO?: string // "owner/repo" of the Charlie runner repo
   GITHUB_RUNNER_REF?: string // git ref to dispatch (default "main")
   RUNNER_WORKFLOW_FILE?: string // default "charlie-run.yml"
+  AI_ANALYZE_WORKFLOW_FILE?: string // default "ai-analyze.yml"
 
   // R2 S3 credentials for presigned uploads. Absent → Worker-proxied upload.
   R2_ACCOUNT_ID?: string

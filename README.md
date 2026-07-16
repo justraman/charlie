@@ -95,7 +95,7 @@ Other confirmed decisions:
 
 ## Status
 
-In development. **Phases 0–6 are complete and verified.**
+In development. **Phases 0–7 are complete and verified.**
 
 Phase 1 — Auth, RBAC & audit:
 
@@ -145,7 +145,15 @@ Phase 6 — Slack integration:
 - Post-run reporter: the Run Coordinator posts a Block Kit pass/fail message (flows passed, or load percentiles + breached threshold) with **View report** and **Re-run** buttons to the originating channel, and scheduled/merge runs report to the project's default channel.
 - SPA: an Integrations settings page (connect/disconnect Slack) and a per-project default report channel.
 
-See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 7: AI-assisted flow generation).
+Phase 7 — AI-assisted flow generation:
+
+- `ai_providers` (migration `0007`, bring-your-own-key encrypted at rest) with a per-org default; `flow_drafts` and `ai_analyses` track AI output and analysis jobs.
+- Analysis runs on GitHub Actions (heavy work off the Worker): an `ai-analyze` workflow checks out the project's `source_repo` read-only, a static pass extracts routes/forms/test-ids/framework, and the configured provider (Anthropic / OpenAI / Workers AI, behind an `AiProvider` interface) returns drafts under a **structured-output contract** — validated against the flow schema and rejected/retried if malformed, never executed blind.
+- Drafts POST back (analysis-token auth) and store as `origin = ai`, `status = draft`. **No environment secrets are ever sent** to the provider; drafts use `{{secrets.*}}` placeholders.
+- A draft is not runnable until an `editor` **approves** it, which mints a real flow + human-authored v1 (the AI is credited in `origin`); approval is audited.
+- SPA: AI provider settings, an "Analyze source repo" action, and a Suggested-flows review UI with the model's reasoning and source references, plus approve/reject.
+
+See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 8: reporting depth, hardening & open-source release).
 
 ## Local development
 

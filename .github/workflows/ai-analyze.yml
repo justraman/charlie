@@ -1,0 +1,49 @@
+# Charlie's AI flow-generation workflow (compute plane). The control-plane Worker
+# dispatches this when a project requests an analysis. It checks out the target
+# source repo (read-only), runs the static-surface analyzer + provider, and POSTs
+# drafts back to the Worker (analysis-token auth). Heavy work stays off the Worker.
+name: ai-analyze
+
+run-name: "charlie-analyze:${{ inputs.analysisId }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      analysisId: { required: true, type: string }
+      apiUrl: { required: true, type: string } # Worker base URL for callbacks
+      repo: { required: true, type: string } # owner/repo of the source to analyze
+      ref: { required: false, type: string } # git ref (default branch if empty)
+      # Short-lived, analysis-scoped token (workflow_dispatch has no secret inputs;
+      # its tight scope + TTL bound the exposure).
+      analysisToken: { required: true, type: string }
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Charlie (analyzer + runner)
+        uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+
+      - name: Check out the source repo (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+          path: source
+          token: ${{ github.token }}
+
+      - name: Analyze source & draft flows
+        run: >
+          bun run --cwd packages/runner charlie analyze
+          --analysis "${{ inputs.analysisId }}"
+          --api "${{ inputs.apiUrl }}"
+          --repo-dir "$GITHUB_WORKSPACE/source"
+        env:
+          CHARLIE_RUN_TOKEN: ${{ inputs.analysisToken }}
+          # Provider creds are fetched from the Worker via the analysis token,
+          # not passed here. Set CHARLIE_FAKE_AI=1 to draft without a provider.

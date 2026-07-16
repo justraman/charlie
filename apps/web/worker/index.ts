@@ -3,10 +3,13 @@ import { dispatchRun } from './consumer'
 import type { AppBindings, Env, RunQueueMessage } from './env'
 import { errorResponse, HttpError } from './lib/http'
 import { uuidv7 } from './lib/ids'
+import aiRoutes from './routes/ai'
+import aiProviderRoutes from './routes/ai-providers'
 import apiKeyRoutes from './routes/apikeys'
 import authRoutes from './routes/auth'
 import callbackRoutes from './routes/callbacks'
 import environmentRoutes from './routes/environments'
+import flowDraftRoutes from './routes/flow-drafts'
 import flowRoutes from './routes/flows'
 import healthRoutes from './routes/health'
 import integrationRoutes from './routes/integrations'
@@ -43,10 +46,13 @@ api.route('/projects', projectRoutes)
 api.route('/runs', runRoutes)
 api.route('/schedules', scheduleRoutes)
 api.route('/integrations', integrationRoutes)
-// environments, flows, and machine callbacks register full subpaths, so they
-// mount at the API root.
+api.route('/ai-providers', aiProviderRoutes)
+// environments, flows, drafts, ai, and machine callbacks register full subpaths,
+// so they mount at the API root.
 api.route('/', environmentRoutes)
 api.route('/', flowRoutes)
+api.route('/', flowDraftRoutes)
+api.route('/', aiRoutes)
 api.route('/', callbackRoutes)
 
 // Unknown /api path → JSON 404 (never the SPA shell).

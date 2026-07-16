@@ -4,6 +4,7 @@ import { useAuth } from '@/auth/AuthContext'
 import { EnvironmentPanel } from '@/components/EnvironmentPanel'
 import { RunTriggerPanel } from '@/components/RunTriggerPanel'
 import { SchedulesPanel } from '@/components/SchedulesPanel'
+import { SuggestedFlowsPanel } from '@/components/SuggestedFlowsPanel'
 import { ApiError, api } from '@/lib/api'
 import styles from './ProjectDetailView.module.css'
 
@@ -133,6 +134,13 @@ export function ProjectDetailView() {
                 </tbody>
               </table>
             </div>
+          </section>
+
+          <section className={styles.flows}>
+            <div className={styles.head}>
+              <h2>Suggested flows (AI)</h2>
+            </div>
+            {projectId && <SuggestedFlowsPanel projectId={projectId} />}
           </section>
 
           <section className={styles.flows}>

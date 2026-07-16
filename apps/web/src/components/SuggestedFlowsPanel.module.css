@@ -1,0 +1,31 @@
+.notice {
+  color: var(--success);
+}
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+.reasoning {
+  font-size: 13px;
+  border-left: 2px solid var(--border);
+  padding-left: 0.6rem;
+  color: var(--text);
+}
+.ref {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin-right: 0.5rem;
+}
+.steps {
+  font-size: 12px;
+  margin: 0.35rem 0;
+  padding-left: 1.25rem;
+  color: var(--text-dim);
+}
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}

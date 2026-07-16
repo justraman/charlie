@@ -135,3 +135,36 @@ export const flowBodySchema = z.strictObject({
 })
 
 export type FlowBody = z.infer<typeof flowBodySchema>
+
+// The structured-output contract for AI flow generation (docs/AI_FLOWGEN.md).
+// A provider must return an array of these; the ingest endpoint validates each
+// against this schema and rejects malformed output (never executes blind). The
+// draft carries the model's reasoning + the source references it used so a human
+// can review before approving into a real flow.
+export const sourceRefSchema = z.strictObject({
+  /** File the surface/interaction was drawn from, repo-relative. */
+  file: z.string().min(1).max(400),
+  /** Optional route/URL path the draft exercises. */
+  route: z.string().max(400).optional(),
+  /** Optional 1-line note on what this reference contributed. */
+  note: z.string().max(400).optional(),
+})
+
+export const flowDraftSchema = z.strictObject({
+  name: z.string().min(1).max(120),
+  description: z.string().max(2000).optional(),
+  engines: z.array(z.enum(ENGINES)).min(1).default(['playwright']),
+  steps: z.array(stepSchema).min(1),
+  loadProfile: loadProfileSchema.nullish(),
+  /** Why the model drafted this flow (shown in the review UI). */
+  reasoning: z.string().max(4000).optional(),
+  /** The source files/routes the draft references. */
+  sourceRefs: z.array(sourceRefSchema).max(50).optional(),
+})
+
+export type SourceRef = z.infer<typeof sourceRefSchema>
+export type FlowDraft = z.infer<typeof flowDraftSchema>
+
+/** Validate a provider's raw output as FlowDraft[]. Returns the parsed drafts
+ *  or throws a ZodError the caller can surface/retry on. */
+export const flowDraftArraySchema = z.array(flowDraftSchema).min(1).max(20)
