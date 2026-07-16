@@ -36,10 +36,104 @@ interface RunDetail {
     status: string
     totals: Record<string, unknown> | null
     e2eSummary: Record<string, unknown> | null
+    loadSummary: LoadSummary | null
   } | null
 }
 
+interface LoadThreshold {
+  metric: string
+  expression: string
+  ok: boolean
+}
+interface LoadSummary {
+  p50: number | null
+  p95: number | null
+  p99: number | null
+  rps: number | null
+  errorRate: number | null
+  requests: number | null
+  checksPassed: number | null
+  checksTotal: number | null
+  thresholds: LoadThreshold[]
+  passed: boolean
+}
+
 const TERMINAL = ['passed', 'failed', 'cancelled']
+
+const ms = (v: number | null) => (v == null ? '—' : `${Math.round(v)} ms`)
+const rate = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)}/s`)
+const pct = (v: number | null) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`)
+
+function LoadReport({ summary }: { summary: LoadSummary }) {
+  const latencies = [
+    { label: 'p50', value: summary.p50 },
+    { label: 'p95', value: summary.p95 },
+    { label: 'p99', value: summary.p99 },
+  ]
+  const maxLatency = Math.max(1, ...latencies.map((l) => l.value ?? 0))
+  return (
+    <div>
+      <div className={styles.metrics}>
+        <div className={styles.metric}>
+          <div className={styles.metricValue}>{ms(summary.p95)}</div>
+          <div className={styles.metricLabel}>p95 latency</div>
+        </div>
+        <div className={styles.metric}>
+          <div className={styles.metricValue}>{rate(summary.rps)}</div>
+          <div className={styles.metricLabel}>requests/sec</div>
+        </div>
+        <div className={styles.metric}>
+          <div className={styles.metricValue}>{pct(summary.errorRate)}</div>
+          <div className={styles.metricLabel}>error rate</div>
+        </div>
+        <div className={styles.metric}>
+          <div className={styles.metricValue}>{summary.requests ?? '—'}</div>
+          <div className={styles.metricLabel}>total requests</div>
+        </div>
+        <div className={styles.metric}>
+          <div className={styles.metricValue}>
+            {summary.checksTotal != null
+              ? `${summary.checksPassed ?? 0}/${summary.checksTotal}`
+              : '—'}
+          </div>
+          <div className={styles.metricLabel}>checks passed</div>
+        </div>
+      </div>
+
+      <h3 style={{ margin: '0.5rem 0 0.25rem' }}>Latency distribution</h3>
+      <div className={styles.chart}>
+        {latencies.map((l) => (
+          <div key={l.label} className={styles.barWrap}>
+            <span className={styles.barValue}>{ms(l.value)}</span>
+            <div
+              className={styles.bar}
+              style={{ height: `${((l.value ?? 0) / maxLatency) * 100}%` }}
+            />
+            <span className={styles.barLabel}>{l.label}</span>
+          </div>
+        ))}
+      </div>
+
+      <h3 style={{ margin: '1rem 0 0.25rem' }}>Thresholds</h3>
+      {summary.thresholds.length === 0 ? (
+        <p className="muted">No thresholds configured.</p>
+      ) : (
+        <div className={styles.thresholds}>
+          {summary.thresholds.map((t) => (
+            <div
+              key={`${t.metric}:${t.expression}`}
+              className={`${styles.threshold} ${t.ok ? styles.ok : styles.bad}`}
+            >
+              <span className={styles.badge}>{t.ok ? 'pass' : 'fail'}</span>
+              <span className={styles.mono}>{t.metric}</span>
+              <span className={styles.expr}>{t.expression}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function RunDetailView() {
   const { id: runId } = useParams<{ id: string }>()
@@ -185,6 +279,7 @@ export function RunDetailView() {
                 : ''}
             </p>
           )}
+          {detail.report.loadSummary && <LoadReport summary={detail.report.loadSummary} />}
         </div>
       )}
 

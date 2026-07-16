@@ -20,6 +20,7 @@
     "db:migrate:remote": "bun run --cwd apps/web db:migrate:remote"
   },
   "dependencies": {
+    "esbuild": "^0.28.1",
     "hono": "^4.12.30",
     "jose": "^6.2.3",
     "playwright-core": "^1.61.1",
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.9",
     "@cloudflare/workers-types": "^5.20260716.1",
+    "@types/k6": "^2.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",

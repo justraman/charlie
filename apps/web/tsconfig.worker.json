@@ -4,7 +4,6 @@
     "lib": ["ES2022"],
     "types": ["@cloudflare/workers-types"],
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@shared/*": ["./shared/*"],
       "@charlie/flow-core": ["../../packages/flow-core/src/index.ts"]

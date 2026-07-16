@@ -18,6 +18,82 @@ import type {
 
 const DEFAULT_DEAD_SHARD_TIMEOUT_MS = 10 * 60 * 1000
 
+interface LoadThreshold {
+  metric: string
+  expression: string
+  ok: boolean
+}
+interface LoadSummaryShape {
+  p50: number | null
+  p95: number | null
+  p99: number | null
+  rps: number | null
+  errorRate: number | null
+  requests: number | null
+  checksPassed: number | null
+  checksTotal: number | null
+  thresholds: LoadThreshold[]
+  passed: boolean
+}
+
+/**
+ * Combine per-shard k6 load summaries into one. k6 runs use a single shard by
+ * design (concurrency is VUs, not matrix jobs), so this is usually pass-through;
+ * for the multi-shard case it takes the worst-case percentiles, sums throughput,
+ * and requires every threshold to hold on every shard.
+ */
+function aggregateLoad(rows: { metrics: string | null }[]): Record<string, unknown> | null {
+  const summaries: LoadSummaryShape[] = []
+  for (const r of rows) {
+    if (!r.metrics) continue
+    try {
+      const m = JSON.parse(r.metrics) as LoadSummaryShape
+      if (m && Array.isArray(m.thresholds)) summaries.push(m)
+    } catch {
+      /* ignore malformed */
+    }
+  }
+  if (summaries.length === 0) return null
+  if (summaries.length === 1) return summaries[0] as unknown as Record<string, unknown>
+
+  const worst = (key: 'p50' | 'p95' | 'p99') =>
+    summaries.reduce<number | null>((acc, s) => {
+      const v = s[key]
+      return v == null ? acc : acc == null ? v : Math.max(acc, v)
+    }, null)
+  const sum = (key: 'rps' | 'requests' | 'checksPassed' | 'checksTotal') =>
+    summaries.reduce<number | null>((acc, s) => {
+      const v = s[key]
+      return v == null ? acc : (acc ?? 0) + v
+    }, null)
+  const totalReqs = sum('requests') ?? 0
+  const errorRate =
+    totalReqs > 0
+      ? summaries.reduce((acc, s) => acc + (s.errorRate ?? 0) * (s.requests ?? 0), 0) / totalReqs
+      : (summaries[0]?.errorRate ?? null)
+  // Thresholds share the same config across shards; a breach on any shard breaks it.
+  const byExpr = new Map<string, LoadThreshold>()
+  for (const s of summaries) {
+    for (const t of s.thresholds) {
+      const existing = byExpr.get(t.expression)
+      byExpr.set(t.expression, existing ? { ...t, ok: existing.ok && t.ok } : { ...t })
+    }
+  }
+  const thresholds = [...byExpr.values()]
+  return {
+    p50: worst('p50'),
+    p95: worst('p95'),
+    p99: worst('p99'),
+    rps: sum('rps'),
+    errorRate,
+    requests: sum('requests'),
+    checksPassed: sum('checksPassed'),
+    checksTotal: sum('checksTotal'),
+    thresholds,
+    passed: thresholds.every((t) => t.ok) && summaries.every((s) => s.passed),
+  }
+}
+
 interface Meta {
   runId: string
   orgId: string
@@ -210,29 +286,13 @@ export class RunCoordinator extends DurableObject<Env> {
     const failedShards = statuses.length - passedShards
     const runStatus: RunStatus = failedShards === 0 ? 'passed' : 'failed'
 
-    // Aggregate per-flow results across shards for the E2E summary.
+    // Pull both the per-flow results (E2E) and metrics (k6) from every shard.
     const rows = await this.env.DB.prepare(
-      `SELECT flow_results FROM shard_results WHERE run_id = ?`,
+      `SELECT flow_results, metrics FROM shard_results WHERE run_id = ?`,
     )
       .bind(meta.runId)
-      .all<{ flow_results: string }>()
-    const flows: FlowResultEntry[] = []
-    for (const r of rows.results) {
-      try {
-        flows.push(...(JSON.parse(r.flow_results) as FlowResultEntry[]))
-      } catch {
-        /* ignore malformed */
-      }
-    }
-    const flowsPassed = flows.filter((f) => f.status === 'passed').length
-    const flowsFailed = flows.length - flowsPassed
-    const firstFailing = flows.find((f) => f.status === 'failed')
-    const e2eSummary = {
-      flowsPassed,
-      flowsFailed,
-      firstFailingFlow: firstFailing?.flow ?? null,
-      firstFailingStep: firstFailing?.failedStep ?? null,
-    }
+      .all<{ flow_results: string | null; metrics: string | null }>()
+
     const totals = {
       shardsPassed: passedShards,
       shardsFailed: failedShards,
@@ -240,29 +300,51 @@ export class RunCoordinator extends DurableObject<Env> {
       reason: reason ?? null,
     }
 
+    // k6 reports load metrics; Playwright reports a per-flow E2E summary.
+    let e2eSummary: Record<string, unknown> | null = null
+    let loadSummary: Record<string, unknown> | null = null
+    if (meta.engine === 'k6') {
+      loadSummary = aggregateLoad(rows.results)
+    } else {
+      const flows: FlowResultEntry[] = []
+      for (const r of rows.results) {
+        try {
+          flows.push(...(JSON.parse(r.flow_results ?? '[]') as FlowResultEntry[]))
+        } catch {
+          /* ignore malformed */
+        }
+      }
+      const flowsPassed = flows.filter((f) => f.status === 'passed').length
+      const firstFailing = flows.find((f) => f.status === 'failed')
+      e2eSummary = {
+        flowsPassed,
+        flowsFailed: flows.length - flowsPassed,
+        firstFailingFlow: firstFailing?.flow ?? null,
+        firstFailingStep: firstFailing?.failedStep ?? null,
+      }
+    }
+
+    const denormalized = { ...totals, ...(loadSummary ?? e2eSummary ?? {}) }
+
     await this.env.DB.batch([
       this.env.DB.prepare(
-        `INSERT INTO reports (id, run_id, status, totals, e2e_summary, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO reports (id, run_id, status, totals, e2e_summary, load_summary, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET
-           status = excluded.status, totals = excluded.totals, e2e_summary = excluded.e2e_summary`,
+           status = excluded.status, totals = excluded.totals,
+           e2e_summary = excluded.e2e_summary, load_summary = excluded.load_summary`,
       ).bind(
         uuidv7(),
         meta.runId,
         runStatus,
         JSON.stringify(totals),
-        JSON.stringify(e2eSummary),
+        e2eSummary ? JSON.stringify(e2eSummary) : null,
+        loadSummary ? JSON.stringify(loadSummary) : null,
         nowIso,
       ),
       this.env.DB.prepare(
         `UPDATE runs SET status = ?, finished_at = ?, error = ?, summary = ? WHERE id = ?`,
-      ).bind(
-        runStatus,
-        nowIso,
-        reason ?? null,
-        JSON.stringify({ ...totals, ...e2eSummary }),
-        meta.runId,
-      ),
+      ).bind(runStatus, nowIso, reason ?? null, JSON.stringify(denormalized), meta.runId),
     ])
 
     await this.markTerminal(meta, runStatus)

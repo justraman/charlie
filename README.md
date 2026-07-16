@@ -95,7 +95,7 @@ Other confirmed decisions:
 
 ## Status
 
-In development. **Phases 0–2 are complete and verified.**
+In development. **Phases 0–4 are complete and verified.**
 
 Phase 1 — Auth, RBAC & audit:
 
@@ -121,7 +121,16 @@ Phase 3 — Execution plane (the control/compute handshake):
 - `packages/runner`: a CLI (`fetch-flow`/`execute`/`finalize`) with a Playwright engine implementing the flow-core adapter, plus the `charlie-run.yml` reusable workflow.
 - SPA: trigger runs, run list, and a run detail page with live SSE progress and an artifact viewer.
 
-See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 4: the k6 load engine).
+Phase 4 — Load engine (k6):
+
+- `@charlie/flow-core` compiles a flow into a k6 HTTP scenario (`goto`→request, `fill`→form body, `submit`→POST, `extract` regex→response capture, `waitFor(ms)`→think-time, `setHeader`→headers; clicks/DOM asserts are surfaced as "not applicable in load mode").
+- Named profiles (`smoke`/`load`/`stress`) supply stage/threshold presets; a flow's `loadProfile` overrides either.
+- `packages/runner` k6 engine: esbuild-bundles the k6 entrypoint with the compiled scenario baked in (k6 can't import Node at runtime), runs `k6 run`, parses the end-of-test summary, and posts a `load_summary` (p50/p95/p99, RPS, error rate, per-threshold pass/fail); thresholds decide pass/fail and name the breached metric.
+- SPA: a load report view with metric cards, a latency distribution chart, and threshold pass/fail.
+
+The **same flow definition** runs as Playwright (Phase 3) or k6 (Phase 4) with no edits.
+
+See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 5: scheduling & triggers).
 
 ## Local development
 

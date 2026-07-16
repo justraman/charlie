@@ -7,7 +7,6 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true,
-    "baseUrl": ".",
     "paths": {
       "@charlie/flow-core": ["../../packages/flow-core/src/index.ts"]
     }

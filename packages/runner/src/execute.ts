@@ -16,6 +16,7 @@ import {
   type RunnerConfig,
   uploadArtifact,
 } from './api'
+import { runK6Shard } from './k6-engine'
 import { PlaywrightAdapter } from './playwright-adapter'
 
 export interface ExecuteOptions {
@@ -57,13 +58,9 @@ export async function runExecute(opts: ExecuteOptions): Promise<void> {
   const fake = process.env.CHARLIE_FAKE_ENGINE === '1'
 
   if (engine === 'k6') {
-    // k6 load execution lands in Phase 4. Report a clear no-op for now.
-    await postShardResult(cfg, runId, {
-      shardIndex,
-      status: 'errored',
-      flowResults: [],
-      metrics: { note: 'k6 engine not implemented until Phase 4' },
-    })
+    // k6 drives concurrency internally (VUs/stages); the engine compiles the
+    // flows, runs k6, and posts a load_summary as this shard's result.
+    await runK6Shard(cfg, bundle, flows, shardIndex)
     return
   }
 

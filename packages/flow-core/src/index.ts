@@ -1,4 +1,5 @@
 export * from './diff'
 export * from './executor'
+export * from './k6'
 export * from './placeholders'
 export * from './schema'
