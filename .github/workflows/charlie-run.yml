@@ -1,0 +1,79 @@
+# Charlie's reusable runner workflow (the compute plane). The control-plane
+# Worker dispatches this via workflow_dispatch with per-run inputs. Three stages:
+# prepare (compute the matrix) → execute (one job per shard) → finalize (always).
+#
+# For self-host v1 the runner repo IS the Charlie repo, so GITHUB_RUNNER_REPO
+# points here and this workflow uses packages/runner directly.
+name: charlie-run
+
+# run-name embeds the platform run id so the control plane can resolve the
+# dispatched workflow run id (which the dispatch API does not return).
+run-name: "charlie-run:${{ inputs.runId }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      runId: { required: true, type: string }
+      projectId: { required: true, type: string }
+      environmentId: { required: true, type: string }
+      engine: { required: true, type: string } # playwright | k6
+      profile: { required: true, type: string } # smoke | load | stress
+      shards: { required: true, type: string } # matrix size
+      apiUrl: { required: true, type: string } # Worker base URL for callbacks
+      # Short-lived, run-scoped token. Passed as an input (workflow_dispatch has
+      # no secret inputs); its tight scope + TTL bound the exposure.
+      runToken: { required: true, type: string }
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        run: echo "matrix=$(seq 0 $(( ${{ inputs.shards }} - 1 )) | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  execute:
+    needs: prepare
+    # Browsers come from the official Playwright image; playwright-core finds them.
+    container: mcr.microsoft.com/playwright:v1.61.1-jammy
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - name: Fetch flow bundle
+        run: bun run --cwd packages/runner charlie fetch-flow --run "${{ inputs.runId }}" --api "${{ inputs.apiUrl }}"
+        env:
+          CHARLIE_RUN_TOKEN: ${{ inputs.runToken }}
+      - name: Execute shard
+        run: >
+          bun run --cwd packages/runner charlie execute
+          --engine "${{ inputs.engine }}"
+          --shard "${{ matrix.shard }}"
+          --run "${{ inputs.runId }}"
+          --api "${{ inputs.apiUrl }}"
+        env:
+          CHARLIE_RUN_TOKEN: ${{ inputs.runToken }}
+      # `execute` posts /shard-result and uploads artifacts via presigned/proxied URLs.
+
+  finalize:
+    needs: execute
+    if: always() # so the Run Coordinator can close the run even after shard failures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - name: Finalize (completion sentinel)
+        run: bun run --cwd packages/runner charlie finalize --run "${{ inputs.runId }}" --api "${{ inputs.apiUrl }}"
+        env:
+          CHARLIE_RUN_TOKEN: ${{ inputs.runToken }}

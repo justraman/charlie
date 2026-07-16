@@ -30,6 +30,11 @@ export function AppHeader() {
               Projects
             </NavLink>
           )}
+          {can('projects.view') && (
+            <NavLink to="/runs" className={navClass}>
+              Runs
+            </NavLink>
+          )}
           {can('members.manage') && (
             <NavLink to="/members" className={navClass}>
               Members

@@ -10,6 +10,8 @@ import { LoginView } from '@/views/LoginView'
 import { MembersView } from '@/views/MembersView'
 import { ProjectDetailView } from '@/views/ProjectDetailView'
 import { ProjectsView } from '@/views/ProjectsView'
+import { RunDetailView } from '@/views/RunDetailView'
+import { RunsView } from '@/views/RunsView'
 
 // The login screen is chromeless; everything else gets the app header.
 function Layout() {
@@ -102,6 +104,22 @@ export function App() {
           element={
             <RequireAuth cap="projects.view">
               <FlowHistoryView />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/runs"
+          element={
+            <RequireAuth cap="projects.view">
+              <RunsView />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/runs/:id"
+          element={
+            <RequireAuth cap="projects.view">
+              <RunDetailView />
             </RequireAuth>
           }
         />

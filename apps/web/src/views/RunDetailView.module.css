@@ -1,0 +1,89 @@
+.back {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+}
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.status {
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.queued {
+  color: var(--text-dim);
+}
+.running {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.passed {
+  color: var(--success);
+  border-color: var(--success);
+}
+.failed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.cancelled {
+  color: var(--text-dim);
+}
+.shards {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.shard {
+  padding: 0.4rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  background: var(--text-dim);
+}
+.dot.running {
+  background: var(--accent);
+}
+.dot.passed {
+  background: var(--success);
+}
+.dot.failed,
+.dot.errored {
+  background: var(--danger);
+}
+.artifacts {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+.thumb {
+  max-width: 240px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mono {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.log {
+  font-size: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+}

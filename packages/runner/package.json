@@ -1,0 +1,17 @@
+{
+  "name": "@charlie/runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "charlie": "./src/cli.ts"
+  },
+  "scripts": {
+    "charlie": "bun run src/cli.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@charlie/flow-core": "workspace:*",
+    "playwright-core": "^1.61.1"
+  }
+}

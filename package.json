@@ -16,7 +16,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "typecheck": "bun run --cwd apps/web typecheck",
+    "typecheck": "bun run --cwd apps/web typecheck && bun run --cwd packages/flow-core typecheck && bun run --cwd packages/runner typecheck",
     "test": "bun test",
     "db:migrate:local": "bun run --cwd apps/web db:migrate:local",
     "db:migrate:remote": "bun run --cwd apps/web db:migrate:remote"

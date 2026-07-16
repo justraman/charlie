@@ -113,7 +113,15 @@ Phase 2 — Projects, environments & flow authoring:
 - `@charlie/flow-core`: the Zod `FlowStep` schema, `{{secrets.*}}`/`{{vars.*}}` placeholder resolution, the engine-agnostic step executor + `actionRegistry`, and version diffing.
 - SPA: project list/detail, environment editor with masked secrets, a step-based flow editor (add/edit/reorder), and flow version history with per-version diffs.
 
-See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 3: the control/compute handshake).
+Phase 3 — Execution plane (the control/compute handshake):
+
+- Runs, shards, results, and reports (migration `0004`); a Cloudflare **Queue** decouples dispatch, a **Durable Object** (Run Coordinator) tracks shard check-ins, aggregates results, fans out live progress over **SSE**, enforces a dead-shard timeout, and writes the terminal report; **R2** holds artifacts.
+- `POST /api/runs` → queued run + Coordinator init + enqueue; queue consumer mints a run token and dispatches the GitHub reusable workflow, resolving `gha_run_id`.
+- Machine-callback routes authorized by short-lived, run-scoped tokens: flow bundle (with decrypted secrets), shard-result, artifact upload, finalize. Cancel + GitHub App token/dispatch/resolve/cancel modules.
+- `packages/runner`: a CLI (`fetch-flow`/`execute`/`finalize`) with a Playwright engine implementing the flow-core adapter, plus the `charlie-run.yml` reusable workflow.
+- SPA: trigger runs, run list, and a run detail page with live SSE progress and an artifact viewer.
+
+See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 4: the k6 load engine).
 
 ## Local development
 

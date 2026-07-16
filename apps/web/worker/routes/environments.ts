@@ -11,7 +11,8 @@ import { authenticate, authorize } from '../middleware/auth'
 
 const environments = new Hono<AppBindings>()
 
-environments.use('*', authenticate)
+// Mounted at the API root, so no blanket `use('*')` (it would shadow run-token
+// callback routes). Each route attaches `authenticate` explicitly.
 
 interface EnvRow {
   id: string
@@ -80,6 +81,7 @@ const headersSchema = z.record(z.string(), z.string())
 // --- GET /api/projects/:projectId/environments (viewer) ---------------------
 environments.get(
   '/projects/:projectId/environments',
+  authenticate,
   authorize({ capability: 'projects.view' }),
   async (c) => {
     const { orgId } = c.get('auth')
@@ -107,6 +109,7 @@ const createSchema = z.object({
 // --- POST /api/projects/:projectId/environments (editor; secrets → admin) ---
 environments.post(
   '/projects/:projectId/environments',
+  authenticate,
   authorize({ capability: 'flows.write' }),
   async (c) => {
     const actor = c.get('auth')
@@ -178,61 +181,68 @@ const patchSchema = z
   .refine((b) => Object.keys(b).length > 0, { message: 'no fields to update' })
 
 // --- PATCH /api/environments/:id (editor; secrets → admin) ------------------
-environments.patch('/environments/:id', authorize({ capability: 'flows.write' }), async (c) => {
-  const actor = c.get('auth')
-  const id = c.req.param('id')
-  const before = await loadEnv(c.env.DB, actor.orgId, id)
-  const body = await parseBody(c, patchSchema)
+environments.patch(
+  '/environments/:id',
+  authenticate,
+  authorize({ capability: 'flows.write' }),
+  async (c) => {
+    const actor = c.get('auth')
+    const id = c.req.param('id')
+    const before = await loadEnv(c.env.DB, actor.orgId, id)
+    const body = await parseBody(c, patchSchema)
 
-  let ciphertext = before.secrets_ciphertext
-  let secretNamesChanged: string[] | undefined
-  if (body.secrets !== undefined) {
-    assertCanManageSecrets(c)
-    const existing = await decryptSecrets(before.secrets_ciphertext, c.env.CHARLIE_KEK)
-    const next = applySecretPatch(existing, body.secrets)
-    ciphertext = Object.keys(next).length > 0 ? await encryptSecrets(next, c.env.CHARLIE_KEK) : null
-    secretNamesChanged = Object.keys(body.secrets)
-  }
+    let ciphertext = before.secrets_ciphertext
+    let secretNamesChanged: string[] | undefined
+    if (body.secrets !== undefined) {
+      assertCanManageSecrets(c)
+      const existing = await decryptSecrets(before.secrets_ciphertext, c.env.CHARLIE_KEK)
+      const next = applySecretPatch(existing, body.secrets)
+      ciphertext =
+        Object.keys(next).length > 0 ? await encryptSecrets(next, c.env.CHARLIE_KEK) : null
+      secretNamesChanged = Object.keys(body.secrets)
+    }
 
-  const now = new Date().toISOString()
-  const next = {
-    name: body.name ?? before.name,
-    base_url: body.baseUrl ?? before.base_url,
-    headers: body.headers ? JSON.stringify(body.headers) : before.headers,
-    auth_config:
-      body.authConfig === undefined ? before.auth_config : JSON.stringify(body.authConfig),
-  }
+    const now = new Date().toISOString()
+    const next = {
+      name: body.name ?? before.name,
+      base_url: body.baseUrl ?? before.base_url,
+      headers: body.headers ? JSON.stringify(body.headers) : before.headers,
+      auth_config:
+        body.authConfig === undefined ? before.auth_config : JSON.stringify(body.authConfig),
+    }
 
-  await writeAudited(
-    c.env.DB,
-    [
-      c.env.DB.prepare(
-        `UPDATE environments SET name = ?, base_url = ?, headers = ?, secrets_ciphertext = ?,
+    await writeAudited(
+      c.env.DB,
+      [
+        c.env.DB.prepare(
+          `UPDATE environments SET name = ?, base_url = ?, headers = ?, secrets_ciphertext = ?,
                                  auth_config = ?, updated_at = ?
            WHERE id = ?`,
-      ).bind(next.name, next.base_url, next.headers, ciphertext, next.auth_config, now, id),
-    ],
-    {
-      orgId: actor.orgId,
-      actorId: actor.actorId,
-      actorKind: actor.actorKind,
-      action: 'environment.update',
-      entityType: 'environment',
-      entityId: id,
-      before: { name: before.name, baseUrl: before.base_url },
-      after: { name: next.name, baseUrl: next.base_url, secretNamesChanged },
-      ip: clientIp(c),
-      userAgent: userAgent(c),
-    },
-  )
+        ).bind(next.name, next.base_url, next.headers, ciphertext, next.auth_config, now, id),
+      ],
+      {
+        orgId: actor.orgId,
+        actorId: actor.actorId,
+        actorKind: actor.actorKind,
+        action: 'environment.update',
+        entityType: 'environment',
+        entityId: id,
+        before: { name: before.name, baseUrl: before.base_url },
+        after: { name: next.name, baseUrl: next.base_url, secretNamesChanged },
+        ip: clientIp(c),
+        userAgent: userAgent(c),
+      },
+    )
 
-  const row = await loadEnv(c.env.DB, actor.orgId, id)
-  return c.json({ environment: await toDto(row, c.env.CHARLIE_KEK) })
-})
+    const row = await loadEnv(c.env.DB, actor.orgId, id)
+    return c.json({ environment: await toDto(row, c.env.CHARLIE_KEK) })
+  },
+)
 
 // --- DELETE /api/environments/:id (admin) -----------------------------------
 environments.delete(
   '/environments/:id',
+  authenticate,
   authorize({ capability: 'projects.delete' }),
   async (c) => {
     const actor = c.get('auth')

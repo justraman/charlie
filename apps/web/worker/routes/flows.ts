@@ -17,7 +17,8 @@ import { authenticate, authorize } from '../middleware/auth'
 
 const flows = new Hono<AppBindings>()
 
-flows.use('*', authenticate)
+// Mounted at the API root, so no blanket `use('*')` (it would shadow run-token
+// callback routes). Each route attaches `authenticate` explicitly.
 
 interface FlowRow {
   id: string
@@ -105,102 +106,112 @@ async function loadVersion(db: D1Database, flowId: string, versionId: string): P
 }
 
 // --- GET /api/projects/:projectId/flows (viewer) ----------------------------
-flows.get('/projects/:projectId/flows', authorize({ capability: 'projects.view' }), async (c) => {
-  const { orgId } = c.get('auth')
-  const projectId = c.req.param('projectId')
-  await assertProject(c.env.DB, orgId, projectId)
-  const rows = await c.env.DB.prepare(
-    `SELECT f.id, f.project_id, f.name, f.description, f.current_version_id, f.engines,
+flows.get(
+  '/projects/:projectId/flows',
+  authenticate,
+  authorize({ capability: 'projects.view' }),
+  async (c) => {
+    const { orgId } = c.get('auth')
+    const projectId = c.req.param('projectId')
+    await assertProject(c.env.DB, orgId, projectId)
+    const rows = await c.env.DB.prepare(
+      `SELECT f.id, f.project_id, f.name, f.description, f.current_version_id, f.engines,
             f.origin, f.created_by, f.created_at, f.updated_at, v.version AS current_version
        FROM flows f
        LEFT JOIN flow_versions v ON v.id = f.current_version_id
       WHERE f.project_id = ? AND f.deleted_at IS NULL ORDER BY f.name ASC`,
-  )
-    .bind(projectId)
-    .all<FlowRow & { current_version: number | null }>()
-  return c.json({
-    flows: rows.results.map((r) => flowDto(r, r.current_version)),
-  })
-})
+    )
+      .bind(projectId)
+      .all<FlowRow & { current_version: number | null }>()
+    return c.json({
+      flows: rows.results.map((r) => flowDto(r, r.current_version)),
+    })
+  },
+)
 
 const createSchema = flowDefinitionSchema
 
 // --- POST /api/projects/:projectId/flows (editor) — create flow + v1 --------
-flows.post('/projects/:projectId/flows', authorize({ capability: 'flows.write' }), async (c) => {
-  const actor = c.get('auth')
-  const projectId = c.req.param('projectId')
-  await assertProject(c.env.DB, actor.orgId, projectId)
-  const body = await parseBody(c, createSchema)
+flows.post(
+  '/projects/:projectId/flows',
+  authenticate,
+  authorize({ capability: 'flows.write' }),
+  async (c) => {
+    const actor = c.get('auth')
+    const projectId = c.req.param('projectId')
+    await assertProject(c.env.DB, actor.orgId, projectId)
+    const body = await parseBody(c, createSchema)
 
-  const clash = await c.env.DB.prepare(
-    `SELECT 1 FROM flows WHERE project_id = ? AND name = ? AND deleted_at IS NULL`,
-  )
-    .bind(projectId, body.name)
-    .first()
-  if (clash) throw new HttpError('conflict', `A flow named "${body.name}" already exists`)
+    const clash = await c.env.DB.prepare(
+      `SELECT 1 FROM flows WHERE project_id = ? AND name = ? AND deleted_at IS NULL`,
+    )
+      .bind(projectId, body.name)
+      .first()
+    if (clash) throw new HttpError('conflict', `A flow named "${body.name}" already exists`)
 
-  const flowId = uuidv7()
-  const versionId = uuidv7()
-  const now = new Date().toISOString()
-  const flowBody: FlowBody = { steps: body.steps, loadProfile: body.loadProfile ?? null }
-  const diff = summarizeFlowDiff(null, flowBody)
+    const flowId = uuidv7()
+    const versionId = uuidv7()
+    const now = new Date().toISOString()
+    const flowBody: FlowBody = { steps: body.steps, loadProfile: body.loadProfile ?? null }
+    const diff = summarizeFlowDiff(null, flowBody)
 
-  await writeAudited(
-    c.env.DB,
-    [
-      // FK-safe ordering: flow (no current version) → version → point flow at it.
-      c.env.DB.prepare(
-        `INSERT INTO flows
+    await writeAudited(
+      c.env.DB,
+      [
+        // FK-safe ordering: flow (no current version) → version → point flow at it.
+        c.env.DB.prepare(
+          `INSERT INTO flows
            (id, project_id, name, description, current_version_id, engines, origin,
             created_by, created_at, updated_at)
          VALUES (?, ?, ?, ?, NULL, ?, 'manual', ?, ?, ?)`,
-      ).bind(
-        flowId,
-        projectId,
-        body.name,
-        body.description ?? null,
-        JSON.stringify(body.engines),
-        actor.actorId,
-        now,
-        now,
-      ),
-      c.env.DB.prepare(
-        `INSERT INTO flow_versions
+        ).bind(
+          flowId,
+          projectId,
+          body.name,
+          body.description ?? null,
+          JSON.stringify(body.engines),
+          actor.actorId,
+          now,
+          now,
+        ),
+        c.env.DB.prepare(
+          `INSERT INTO flow_versions
            (id, flow_id, version, steps, load_profile, author_id, diff_summary, created_at)
          VALUES (?, ?, 1, ?, ?, ?, ?, ?)`,
-      ).bind(
-        versionId,
-        flowId,
-        JSON.stringify(body.steps),
-        body.loadProfile ? JSON.stringify(body.loadProfile) : null,
-        actor.actorId,
-        diff,
-        now,
-      ),
-      c.env.DB.prepare(`UPDATE flows SET current_version_id = ? WHERE id = ?`).bind(
-        versionId,
-        flowId,
-      ),
-    ],
-    {
-      orgId: actor.orgId,
-      actorId: actor.actorId,
-      actorKind: actor.actorKind,
-      action: 'flow.create',
-      entityType: 'flow',
-      entityId: flowId,
-      after: { name: body.name, engines: body.engines, version: 1 },
-      ip: clientIp(c),
-      userAgent: userAgent(c),
-    },
-  )
+        ).bind(
+          versionId,
+          flowId,
+          JSON.stringify(body.steps),
+          body.loadProfile ? JSON.stringify(body.loadProfile) : null,
+          actor.actorId,
+          diff,
+          now,
+        ),
+        c.env.DB.prepare(`UPDATE flows SET current_version_id = ? WHERE id = ?`).bind(
+          versionId,
+          flowId,
+        ),
+      ],
+      {
+        orgId: actor.orgId,
+        actorId: actor.actorId,
+        actorKind: actor.actorKind,
+        action: 'flow.create',
+        entityType: 'flow',
+        entityId: flowId,
+        after: { name: body.name, engines: body.engines, version: 1 },
+        ip: clientIp(c),
+        userAgent: userAgent(c),
+      },
+    )
 
-  const row = await loadFlow(c.env.DB, actor.orgId, flowId)
-  return c.json({ flow: flowDto(row, 1) }, 201)
-})
+    const row = await loadFlow(c.env.DB, actor.orgId, flowId)
+    return c.json({ flow: flowDto(row, 1) }, 201)
+  },
+)
 
 // --- GET /api/flows/:id (viewer) — flow + current version -------------------
-flows.get('/flows/:id', authorize({ capability: 'projects.view' }), async (c) => {
+flows.get('/flows/:id', authenticate, authorize({ capability: 'projects.view' }), async (c) => {
   const { orgId } = c.get('auth')
   const row = await loadFlow(c.env.DB, orgId, c.req.param('id'))
   const version = row.current_version_id
@@ -219,7 +230,7 @@ const putSchema = flowBodySchema.extend({
 })
 
 // --- PUT /api/flows/:id (editor) — new version + diff -----------------------
-flows.put('/flows/:id', authorize({ capability: 'flows.write' }), async (c) => {
+flows.put('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), async (c) => {
   const actor = c.get('auth')
   const id = c.req.param('id')
   const flow = await loadFlow(c.env.DB, actor.orgId, id)
@@ -285,57 +296,67 @@ flows.put('/flows/:id', authorize({ capability: 'flows.write' }), async (c) => {
 })
 
 // --- GET /api/flows/:id/versions (viewer) — history -------------------------
-flows.get('/flows/:id/versions', authorize({ capability: 'projects.view' }), async (c) => {
-  const { orgId } = c.get('auth')
-  const flow = await loadFlow(c.env.DB, orgId, c.req.param('id'))
-  const rows = await c.env.DB.prepare(
-    `SELECT v.id, v.version, v.author_id, v.diff_summary, v.created_at, u.name AS author_name,
+flows.get(
+  '/flows/:id/versions',
+  authenticate,
+  authorize({ capability: 'projects.view' }),
+  async (c) => {
+    const { orgId } = c.get('auth')
+    const flow = await loadFlow(c.env.DB, orgId, c.req.param('id'))
+    const rows = await c.env.DB.prepare(
+      `SELECT v.id, v.version, v.author_id, v.diff_summary, v.created_at, u.name AS author_name,
             u.email AS author_email
        FROM flow_versions v
        LEFT JOIN users u ON u.id = v.author_id
       WHERE v.flow_id = ? ORDER BY v.version DESC`,
-  )
-    .bind(flow.id)
-    .all<{
-      id: string
-      version: number
-      author_id: string
-      diff_summary: string | null
-      created_at: string
-      author_name: string | null
-      author_email: string | null
-    }>()
-  return c.json({
-    versions: rows.results.map((r) => ({
-      id: r.id,
-      version: r.version,
-      authorId: r.author_id,
-      authorName: r.author_name,
-      authorEmail: r.author_email,
-      diffSummary: r.diff_summary,
-      createdAt: r.created_at,
-      isCurrent: r.id === flow.current_version_id,
-    })),
-  })
-})
+    )
+      .bind(flow.id)
+      .all<{
+        id: string
+        version: number
+        author_id: string
+        diff_summary: string | null
+        created_at: string
+        author_name: string | null
+        author_email: string | null
+      }>()
+    return c.json({
+      versions: rows.results.map((r) => ({
+        id: r.id,
+        version: r.version,
+        authorId: r.author_id,
+        authorName: r.author_name,
+        authorEmail: r.author_email,
+        diffSummary: r.diff_summary,
+        createdAt: r.created_at,
+        isCurrent: r.id === flow.current_version_id,
+      })),
+    })
+  },
+)
 
 // --- GET /api/flows/:id/versions/:v (viewer) — a specific version -----------
-flows.get('/flows/:id/versions/:v', authorize({ capability: 'projects.view' }), async (c) => {
-  const { orgId } = c.get('auth')
-  const flow = await loadFlow(c.env.DB, orgId, c.req.param('id'))
-  const versionNum = Number(c.req.param('v'))
-  if (!Number.isInteger(versionNum)) throw new HttpError('bad_request', 'Invalid version number')
-  const row = await c.env.DB.prepare(
-    `SELECT * FROM flow_versions WHERE flow_id = ? AND version = ?`,
-  )
-    .bind(flow.id, versionNum)
-    .first<VersionRow>()
-  if (!row) throw new HttpError('not_found', 'Version not found')
-  return c.json({ version: versionDto(row) })
-})
+flows.get(
+  '/flows/:id/versions/:v',
+  authenticate,
+  authorize({ capability: 'projects.view' }),
+  async (c) => {
+    const { orgId } = c.get('auth')
+    const flow = await loadFlow(c.env.DB, orgId, c.req.param('id'))
+    const versionNum = Number(c.req.param('v'))
+    if (!Number.isInteger(versionNum)) throw new HttpError('bad_request', 'Invalid version number')
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM flow_versions WHERE flow_id = ? AND version = ?`,
+    )
+      .bind(flow.id, versionNum)
+      .first<VersionRow>()
+    if (!row) throw new HttpError('not_found', 'Version not found')
+    return c.json({ version: versionDto(row) })
+  },
+)
 
 // --- DELETE /api/flows/:id (editor) — soft delete ---------------------------
-flows.delete('/flows/:id', authorize({ capability: 'flows.write' }), async (c) => {
+flows.delete('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), async (c) => {
   const actor = c.get('auth')
   const id = c.req.param('id')
   const flow = await loadFlow(c.env.DB, actor.orgId, id)

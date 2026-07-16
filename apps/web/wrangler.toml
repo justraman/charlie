@@ -4,7 +4,7 @@ compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
-# Built Vue SPA is served as static assets; unmatched routes fall back to
+# Built React SPA is served as static assets; unmatched routes fall back to
 # index.html (client-side routing). The Worker handles /api, /webhooks, /slack.
 [assets]
 binding = "ASSETS"
@@ -26,6 +26,31 @@ migrations_dir = "../../migrations"
 [[kv_namespaces]]
 binding = "KV"
 id = "charlie_kv_local_placeholder"
+
+# Large artifacts: screenshots, videos, Playwright traces, k6 summaries, HTML reports.
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "charlie-artifacts"
+
+# Dispatch decoupling: POST /api/runs enqueues here; the consumer dispatches to GitHub.
+[[queues.producers]]
+binding = "RUNS_QUEUE"
+queue = "charlie-runs"
+
+[[queues.consumers]]
+queue = "charlie-runs"
+max_batch_size = 5
+max_retries = 3
+max_batch_timeout = 5
+
+# Per-run coordination: shard check-in, aggregation, dead-shard timeout, SSE fan-out.
+[[durable_objects.bindings]]
+name = "RUN_COORDINATOR"
+class_name = "RunCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RunCoordinator"]
 
 [observability]
 enabled = true

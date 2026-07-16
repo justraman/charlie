@@ -18,10 +18,27 @@ APP_BASE_URL="http://localhost:8787"
 # Set to "true" to require the Secure cookie flag (production). Leave empty in local dev over http.
 COOKIE_SECURE=""
 
-# --- GitHub App (Phase 3) — not required for Phase 1 ---
+# --- Run callback token (Phase 3) ---
+# Signs short-lived, run-scoped tokens the compute plane uses for callbacks.
+# Generate: `openssl rand -base64 32`. Falls back to CHARLIE_KEK if unset.
+CHARLIE_RUN_TOKEN_SECRET=""
+
+# --- GitHub App (Phase 3) — dispatch to the runner repo ---
+# Absent locally → workflow dispatch is skipped (simulate the runner instead).
 # GITHUB_APP_ID=""
-# GITHUB_APP_PRIVATE_KEY=""
+# GITHUB_APP_PRIVATE_KEY=""          # PKCS#8 PEM (keep newlines)
+# GITHUB_INSTALLATION_ID=""
 # GITHUB_WEBHOOK_SECRET=""
+# GITHUB_RUNNER_REPO="your-org/charlie-runner"
+# GITHUB_RUNNER_REF="main"
+# RUNNER_WORKFLOW_FILE="charlie-run.yml"
+
+# --- R2 S3 credentials (Phase 3) — presigned artifact uploads ---
+# Absent → the Worker proxies artifact uploads to the R2 binding (fine locally).
+# R2_ACCOUNT_ID=""
+# R2_ACCESS_KEY_ID=""
+# R2_SECRET_ACCESS_KEY=""
+# R2_BUCKET="charlie-artifacts"
 
 # --- Slack (Phase 6) — not required for Phase 1 ---
 # SLACK_SIGNING_SECRET=""
