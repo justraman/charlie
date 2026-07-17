@@ -1,7 +1,18 @@
 # Charlie Worker secrets — copy to apps/web/.dev.vars for local dev.
 # In production these are set with `wrangler secret put <NAME>`.
 
-# --- Google OIDC (Phase 1) ---
+# --- Local dev login (no external IdP) ---
+# Set this to sign in locally without a Google OAuth client. Enables
+# GET /api/auth/dev (and a "Dev login" button on the login page), which mints a
+# session for this email. First user becomes owner, same as real login.
+# Local-only: it 404s unless set, and refuses when COOKIE_SECURE="true". Keep it
+# in .dev.vars only — never `wrangler secret put` it.
+DEV_LOGIN_EMAIL="you@example.com"
+# Role for that user, applied on every dev login. Default "owner" (full access).
+# Set to viewer|editor|admin to exercise RBAC locally.
+DEV_LOGIN_ROLE="owner"
+
+# --- Google OIDC (Phase 1) — optional locally if DEV_LOGIN_EMAIL is set ---
 # Create an OAuth 2.0 Web client in Google Cloud Console.
 # Authorized redirect URI: http://localhost:8787/api/auth/google/callback (dev)
 GOOGLE_CLIENT_ID=""

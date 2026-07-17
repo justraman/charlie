@@ -17,6 +17,7 @@ import {
   verifyGoogleIdToken,
 } from '../lib/oidc'
 import { ensureOrganization, type Organization } from '../lib/org'
+import { isRole, type Role } from '../../shared/roles'
 import { createSession, destroySession, SESSION_COOKIE } from '../lib/session'
 import { authenticate } from '../middleware/auth'
 
@@ -157,6 +158,71 @@ auth.get('/google/callback', async (c) => {
   })
 
   return c.redirect(redirectTo, 302)
+})
+
+// --- GET /api/auth/dev ------------------------------------------------------
+// Local-dev shortcut: mint a session for DEV_LOGIN_EMAIL with no external IdP,
+// so running Charlie locally needs no Google OAuth client. Two guards keep this
+// out of production: the route 404s unless DEV_LOGIN_EMAIL is set (it belongs in
+// .dev.vars only, never `wrangler secret put`), and it hard-refuses when the
+// Secure-cookie flag is on (i.e. a real HTTPS deployment).
+auth.get('/dev', async (c) => {
+  const email = c.env.DEV_LOGIN_EMAIL
+  if (!email) throw new HttpError('not_found', 'Not found')
+  if (c.env.COOKIE_SECURE === 'true') {
+    throw new HttpError('internal', 'Dev login is disabled when COOKIE_SECURE is set')
+  }
+
+  const db = createDb(c.env.DB)
+  const org = await ensureOrganization(db, {
+    name: c.env.ORG_NAME ?? 'Charlie',
+    domainsCsv: c.env.ALLOWED_EMAIL_DOMAINS ?? '',
+  })
+
+  // The operator opted in by setting DEV_LOGIN_EMAIL, so we skip the domain gate
+  // and reuse the real upsert (google_sub keying, user row shape).
+  const identity: GoogleIdentity = {
+    sub: `dev:${email.toLowerCase()}`,
+    email,
+    emailVerified: true,
+    name: email.split('@')[0] ?? email,
+    picture: null,
+  }
+  const user = await upsertUser(db, org, identity)
+
+  // Unlike prod's first-user-wins rule, force the dev user to a chosen role
+  // (default owner) every login, so you always have full access locally. Set
+  // DEV_LOGIN_ROLE=viewer|editor|admin to exercise RBAC.
+  const devRole = c.env.DEV_LOGIN_ROLE
+  const role: Role = devRole && isRole(devRole) ? devRole : 'owner'
+  if (user.role !== role) {
+    await db
+      .update(users)
+      .set({ role, updated_at: new Date().toISOString() })
+      .where(eq(users.id, user.id))
+    user.role = role
+  }
+
+  const session = await createSession(db, {
+    userId: user.id,
+    userAgent: userAgent(c),
+    ip: clientIp(c),
+  })
+  setCookie(c, SESSION_COOKIE, session.token, sessionCookieOptions(c.env, session.maxAgeSec))
+
+  await writeAudit(db, {
+    orgId: org.id,
+    actorId: user.id,
+    actorKind: 'user',
+    action: 'auth.login',
+    entityType: 'user',
+    entityId: user.id,
+    after: { email: user.email, role: user.role, firstUser: user.isFirstUser, dev: true },
+    ip: clientIp(c),
+    userAgent: userAgent(c),
+  })
+
+  return c.redirect(safeRedirect(c.req.query('redirect')), 302)
 })
 
 // --- POST /api/auth/logout --------------------------------------------------

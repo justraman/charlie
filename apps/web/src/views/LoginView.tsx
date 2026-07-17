@@ -17,6 +17,13 @@ export function LoginView() {
   const redirect = params.get('redirect') ?? '/'
   const startUrl = `/api/auth/google/start?redirect=${encodeURIComponent(redirect)}`
 
+  // Local dev only: offer the DEV_LOGIN_EMAIL shortcut. The button just links to
+  // the route; the backend enforces the actual guard (it 404s if unconfigured).
+  const isLocal =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  const devUrl = `/api/auth/dev?redirect=${encodeURIComponent(redirect)}`
+
   return (
     <div className={styles.wrap}>
       <div className={`card ${styles.card}`}>
@@ -29,6 +36,12 @@ export function LoginView() {
         <a className={`btn btn-primary ${styles.google}`} href={startUrl}>
           Continue with Google
         </a>
+
+        {isLocal && (
+          <a className={`btn ${styles.google}`} href={devUrl}>
+            Dev login (local)
+          </a>
+        )}
 
         <p className={`muted ${styles.fine}`}>Access is restricted to allowed email domains.</p>
       </div>
