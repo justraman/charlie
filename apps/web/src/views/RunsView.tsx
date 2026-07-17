@@ -1,7 +1,12 @@
+import { AlertCircleIcon, RefreshCwIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { PageHeader } from '@/components/page-header'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ApiError, api } from '@/lib/api'
-import styles from './RunsView.module.css'
 
 interface Run {
   id: string
@@ -12,6 +17,24 @@ interface Run {
   flowSelection: { name: string }[]
   queuedAt: string
   expectedShards: number
+}
+
+/** Semantic color classes for a run/shard status badge. */
+function statusBadge(status: string): string {
+  switch (status) {
+    case 'passed':
+      return 'border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+    case 'failed':
+    case 'errored':
+      return 'border-transparent bg-red-500/15 text-red-600 dark:text-red-400'
+    case 'running':
+      return 'border-transparent bg-blue-500/15 text-blue-600 dark:text-blue-400'
+    case 'queued':
+    case 'pending':
+      return 'border-transparent bg-secondary text-secondary-foreground'
+    default:
+      return 'border-border bg-transparent text-muted-foreground'
+  }
 }
 
 export function RunsView() {
@@ -32,54 +55,69 @@ export function RunsView() {
   }, [load])
 
   return (
-    <div className="container">
-      <div className={styles.head}>
-        <h1>Runs</h1>
-        <button type="button" className="btn" onClick={load}>
-          Refresh
-        </button>
-      </div>
-      {error && <p className="error">{error}</p>}
-      <div className="card">
-        <table>
-          <thead>
-            <tr>
-              <th>Run</th>
-              <th>Engine</th>
-              <th>Flows</th>
-              <th>Status</th>
-              <th>Trigger</th>
-              <th>Queued</th>
-            </tr>
-          </thead>
-          <tbody>
+    <div className="space-y-6">
+      <PageHeader
+        title="Runs"
+        description="Inspect run history, reports, and live progress."
+        actions={
+          <Button type="button" variant="outline" onClick={load}>
+            <RefreshCwIcon />
+            Refresh
+          </Button>
+        }
+      />
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircleIcon />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Run</TableHead>
+              <TableHead>Engine</TableHead>
+              <TableHead>Flows</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Trigger</TableHead>
+              <TableHead>Queued</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {runs.length === 0 && (
-              <tr>
-                <td colSpan={6} className="muted">
+              <TableRow>
+                <TableCell colSpan={6} className="text-muted-foreground text-center">
                   No runs yet.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
             {runs.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <Link to={`/runs/${r.id}`} className={styles.mono}>
+              <TableRow key={r.id}>
+                <TableCell>
+                  <Link to={`/runs/${r.id}`} className="font-mono text-xs hover:underline">
                     {r.id.slice(0, 8)}
                   </Link>
-                </td>
-                <td>
-                  <span className="badge">{r.engine}</span>
-                </td>
-                <td className="muted">{r.flowSelection.map((f) => f.name).join(', ') || '—'}</td>
-                <td>
-                  <span className={`${styles.status} ${styles[r.status] ?? ''}`}>{r.status}</span>
-                </td>
-                <td className="muted">{r.trigger}</td>
-                <td className="muted">{new Date(r.queuedAt).toLocaleString()}</td>
-              </tr>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="secondary">{r.engine}</Badge>
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {r.flowSelection.map((f) => f.name).join(', ') || '—'}
+                </TableCell>
+                <TableCell>
+                  <Badge className={statusBadge(r.status)}>{r.status}</Badge>
+                </TableCell>
+                <TableCell className="text-muted-foreground">{r.trigger}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {new Date(r.queuedAt).toLocaleString()}
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   )

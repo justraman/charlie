@@ -1,4 +1,5 @@
 import { fileURLToPath, URL } from 'node:url'
+import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
@@ -9,8 +10,13 @@ import { defineConfig } from 'vite'
 const WORKER_ORIGIN = 'http://localhost:8787'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
+    // Force a single React instance. The unified `radix-ui` package can
+    // otherwise resolve its own copy during dep pre-bundling, which surfaces as
+    // "Invalid hook call / Cannot read properties of null (reading 'useRef')"
+    // when a Select (or other primitive) mounts.
+    dedupe: ['react', 'react-dom'],
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
       '@shared': fileURLToPath(new URL('./shared', import.meta.url)),

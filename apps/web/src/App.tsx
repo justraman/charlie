@@ -2,7 +2,10 @@ import type { Capability } from '@shared/roles'
 import type { ReactElement } from 'react'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
-import { AppHeader } from '@/components/AppHeader'
+import { AppSidebar } from '@/components/app-sidebar'
+import { ModeToggle } from '@/components/mode-toggle'
+import { Separator } from '@/components/ui/separator'
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { DashboardView } from '@/views/DashboardView'
 import { FlowEditorView } from '@/views/FlowEditorView'
 import { FlowHistoryView } from '@/views/FlowHistoryView'
@@ -14,17 +17,29 @@ import { ProjectsView } from '@/views/ProjectsView'
 import { RunDetailView } from '@/views/RunDetailView'
 import { RunsView } from '@/views/RunsView'
 
-// The login screen is chromeless; everything else gets the app header.
+// The login screen is chromeless; everything else gets the sidebar shell.
 function Layout() {
   const { pathname } = useLocation()
-  const chromeless = pathname === '/login'
+  if (pathname === '/login') {
+    return <Outlet />
+  }
   return (
-    <>
-      {!chromeless && <AppHeader />}
-      <main>
-        <Outlet />
-      </main>
-    </>
+    <SidebarProvider>
+      <AppSidebar />
+      <SidebarInset>
+        <header className="bg-background/80 sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b px-4 backdrop-blur">
+          <SidebarTrigger className="-ml-1" />
+          <Separator orientation="vertical" className="mr-1 h-5" />
+          <div className="flex-1" />
+          <ModeToggle />
+        </header>
+        <main className="flex-1 overflow-x-hidden">
+          <div className="mx-auto w-full max-w-6xl p-4 sm:p-6 lg:p-8">
+            <Outlet />
+          </div>
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }
 

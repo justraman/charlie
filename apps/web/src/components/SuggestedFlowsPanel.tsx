@@ -1,7 +1,17 @@
+import { AlertCircleIcon, CheckCircle2Icon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/auth/AuthContext'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { ApiError, api } from '@/lib/api'
-import styles from './SuggestedFlowsPanel.module.css'
 
 interface SourceRef {
   file: string
@@ -77,66 +87,103 @@ export function SuggestedFlowsPanel({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div>
-      {error && <p className="error">{error}</p>}
-      {notice && <p className={styles.notice}>{notice}</p>}
-      {editable && (
-        <button type="button" className="btn" disabled={busy} onClick={analyze}>
-          Analyze source repo
-        </button>
-      )}
-      {drafts.length === 0 ? (
-        <p className="muted" style={{ marginTop: '0.5rem' }}>
-          No suggested flows. Point the project at a source repo and run an analysis.
-        </p>
-      ) : (
-        <div
-          style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}
-        >
-          {drafts.map((d) => (
-            <div key={d.id} className="card">
-              <div className={styles.head}>
-                <strong>{d.name}</strong>
-                <span className="muted">
-                  {d.engines.join(', ')} · {d.steps.length} steps
-                </span>
-              </div>
-              {d.description && <p className="muted">{d.description}</p>}
-              {d.reasoning && <p className={styles.reasoning}>{d.reasoning}</p>}
-              {d.sourceRefs.length > 0 && (
-                <p className="muted">
-                  Source:{' '}
-                  {d.sourceRefs.map((s) => (
-                    <span key={`${s.file}:${s.route ?? ''}`} className={styles.ref}>
-                      {s.file}
-                      {s.route ? ` (${s.route})` : ''}
+    <Card>
+      <CardHeader>
+        <CardTitle>Suggested flows</CardTitle>
+        {editable && (
+          <CardAction>
+            <Button type="button" size="sm" disabled={busy} onClick={analyze}>
+              Analyze source repo
+            </Button>
+          </CardAction>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircleIcon />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        {notice && (
+          <Alert className="text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2Icon />
+            <AlertDescription className="text-emerald-600 dark:text-emerald-400">
+              {notice}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {drafts.length === 0 ? (
+          <p className="text-muted-foreground text-sm">
+            No suggested flows. Point the project at a source repo and run an analysis.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {drafts.map((d) => (
+              <Card key={d.id}>
+                <CardContent className="space-y-2">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <strong className="font-semibold">{d.name}</strong>
+                    <span className="text-muted-foreground text-sm">
+                      {d.engines.join(', ')} · {d.steps.length} steps
                     </span>
-                  ))}
-                </p>
-              )}
-              <details>
-                <summary className="muted">Steps</summary>
-                <ol className={styles.steps}>
-                  {d.steps.map((s, i) => (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: steps are an ordered fixed list
-                    <li key={i}>{s.action}</li>
-                  ))}
-                </ol>
-              </details>
-              {editable && (
-                <div className={styles.actions}>
-                  <button type="button" className="btn btn-primary" onClick={() => approve(d.id)}>
-                    Approve → flow
-                  </button>
-                  <button type="button" className="btn btn-danger" onClick={() => reject(d.id)}>
-                    Reject
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+                  </div>
+                  {d.description && (
+                    <p className="text-muted-foreground text-sm">{d.description}</p>
+                  )}
+                  {d.reasoning && (
+                    <p className="border-border text-foreground border-l-2 pl-2.5 text-[13px]">
+                      {d.reasoning}
+                    </p>
+                  )}
+                  {d.sourceRefs.length > 0 && (
+                    <p className="text-muted-foreground text-sm">
+                      Source:{' '}
+                      {d.sourceRefs.map((s) => (
+                        <Badge
+                          key={`${s.file}:${s.route ?? ''}`}
+                          variant="outline"
+                          className="mr-2 font-mono text-xs font-normal"
+                        >
+                          {s.file}
+                          {s.route ? ` (${s.route})` : ''}
+                        </Badge>
+                      ))}
+                    </p>
+                  )}
+                  <details>
+                    <summary className="text-muted-foreground cursor-pointer text-sm">
+                      Steps
+                    </summary>
+                    <ol className="text-muted-foreground my-1.5 list-decimal pl-5 text-xs">
+                      {d.steps.map((s, i) => (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: steps are an ordered fixed list
+                        <li key={i}>{s.action}</li>
+                      ))}
+                    </ol>
+                  </details>
+                  {editable && (
+                    <div className="flex gap-2 pt-0.5">
+                      <Button type="button" size="sm" onClick={() => approve(d.id)}>
+                        Approve → flow
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => reject(d.id)}
+                      >
+                        Reject
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

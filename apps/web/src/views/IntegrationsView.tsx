@@ -1,6 +1,35 @@
 import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
+import { PageHeader } from '@/components/page-header'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { ApiError, api } from '@/lib/api'
-import styles from './IntegrationsView.module.css'
 
 interface Status {
   slack: { connected: boolean; teamId: string | null; updatedAt: string | null }
@@ -15,10 +44,10 @@ interface AiProvider {
   isDefault: boolean
 }
 
+const connectedBadge = 'border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+
 export function IntegrationsView() {
   const [status, setStatus] = useState<Status | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
   const [teamId, setTeamId] = useState('')
   const [botToken, setBotToken] = useState('')
   const [signingSecret, setSigningSecret] = useState('')
@@ -39,13 +68,11 @@ export function IntegrationsView() {
       setStatus(s)
       setProviders(p.providers)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      toast.error(err instanceof ApiError ? err.message : String(err))
     }
   }, [])
 
   async function addProvider() {
-    setError(null)
-    setNotice(null)
     try {
       await api.post('/api/ai-providers', {
         name: aiName,
@@ -55,10 +82,10 @@ export function IntegrationsView() {
       })
       setAiKey('')
       setAiAccount('')
-      setNotice('Provider saved.')
+      toast.success('Provider saved.')
       await load()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      toast.error(err instanceof ApiError ? err.message : String(err))
     }
   }
 
@@ -67,7 +94,7 @@ export function IntegrationsView() {
       await api.patch(`/api/ai-providers/${id}`, { makeDefault: true })
       await load()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      toast.error(err instanceof ApiError ? err.message : String(err))
     }
   }
 
@@ -77,7 +104,7 @@ export function IntegrationsView() {
       await api.delete(`/api/ai-providers/${id}`)
       await load()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      toast.error(err instanceof ApiError ? err.message : String(err))
     }
   }
 
@@ -87,8 +114,6 @@ export function IntegrationsView() {
 
   async function connect() {
     setBusy(true)
-    setError(null)
-    setNotice(null)
     try {
       await api.put('/api/integrations/slack', {
         teamId: teamId || undefined,
@@ -97,10 +122,10 @@ export function IntegrationsView() {
       })
       setBotToken('')
       setSigningSecret('')
-      setNotice('Slack connected. Credentials are encrypted at rest.')
+      toast.success('Slack connected. Credentials are encrypted at rest.')
       await load()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      toast.error(err instanceof ApiError ? err.message : String(err))
     } finally {
       setBusy(false)
     }
@@ -110,202 +135,234 @@ export function IntegrationsView() {
     if (!confirm('Disconnect Slack?')) return
     try {
       await api.delete('/api/integrations/slack')
-      setNotice('Slack disconnected.')
+      toast.success('Slack disconnected.')
       await load()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      toast.error(err instanceof ApiError ? err.message : String(err))
     }
   }
 
   return (
-    <div className="container">
-      <h1>Integrations</h1>
-      {error && <p className="error">{error}</p>}
-      {notice && <p className={styles.notice}>{notice}</p>}
+    <div className="space-y-6">
+      <PageHeader
+        title="Integrations"
+        description="Connect Charlie to Slack, GitHub, and your AI providers."
+      />
 
-      <section>
-        <div className={styles.head}>
-          <h2>Slack</h2>
-          {status?.slack.connected ? (
-            <span className={styles.connected}>
-              connected{status.slack.teamId ? ` · ${status.slack.teamId}` : ''}
-            </span>
-          ) : (
-            <span className="muted">not connected</span>
+      <Card>
+        <CardHeader>
+          <CardTitle>Slack</CardTitle>
+          <CardAction>
+            {status?.slack.connected ? (
+              <Badge className={connectedBadge}>
+                connected{status.slack.teamId ? ` · ${status.slack.teamId}` : ''}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-muted-foreground">
+                not connected
+              </Badge>
+            )}
+          </CardAction>
+          <CardDescription>
+            Create a single-workspace Slack app with a <code>/charlie</code> slash command and
+            interactivity, then paste its bot token and signing secret here. They are stored
+            encrypted and never shown again.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="max-w-md space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="slack-team-id">Team ID (optional)</Label>
+              <Input
+                id="slack-team-id"
+                value={teamId}
+                onChange={(e) => setTeamId(e.target.value)}
+                placeholder="T0123ABCD"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="slack-bot-token">Bot token</Label>
+              <Input
+                id="slack-bot-token"
+                type="password"
+                value={botToken}
+                onChange={(e) => setBotToken(e.target.value)}
+                placeholder="xoxb-…"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="slack-signing-secret">Signing secret</Label>
+              <Input
+                id="slack-signing-secret"
+                type="password"
+                value={signingSecret}
+                onChange={(e) => setSigningSecret(e.target.value)}
+                placeholder="Slack app signing secret"
+              />
+            </div>
+          </div>
+        </CardContent>
+        <CardFooter className="gap-2">
+          <Button
+            type="button"
+            disabled={busy || botToken.length < 10 || signingSecret.length < 10}
+            onClick={connect}
+          >
+            {status?.slack.connected ? 'Update credentials' : 'Connect Slack'}
+          </Button>
+          {status?.slack.connected && (
+            <Button type="button" variant="destructive" onClick={disconnect}>
+              Disconnect
+            </Button>
           )}
-        </div>
-        <p className="muted">
-          Create a single-workspace Slack app with a <code>/charlie</code> slash command and
-          interactivity, then paste its bot token and signing secret here. They are stored encrypted
-          and never shown again.
-        </p>
-        <div className={`card ${styles.form}`}>
-          <label className={styles.field}>
-            <span>Team ID (optional)</span>
-            <input
-              value={teamId}
-              onChange={(e) => setTeamId(e.target.value)}
-              placeholder="T0123ABCD"
-            />
-          </label>
-          <label className={styles.field}>
-            <span>Bot token</span>
-            <input
-              type="password"
-              value={botToken}
-              onChange={(e) => setBotToken(e.target.value)}
-              placeholder="xoxb-…"
-            />
-          </label>
-          <label className={styles.field}>
-            <span>Signing secret</span>
-            <input
-              type="password"
-              value={signingSecret}
-              onChange={(e) => setSigningSecret(e.target.value)}
-              placeholder="Slack app signing secret"
-            />
-          </label>
-          <div className={styles.actions}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy || botToken.length < 10 || signingSecret.length < 10}
-              onClick={connect}
-            >
-              {status?.slack.connected ? 'Update credentials' : 'Connect Slack'}
-            </button>
-            {status?.slack.connected && (
-              <button type="button" className="btn btn-danger" onClick={disconnect}>
-                Disconnect
-              </button>
+        </CardFooter>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>GitHub</CardTitle>
+          <CardAction>
+            {status?.github.connected ? (
+              <Badge className={connectedBadge}>configured</Badge>
+            ) : (
+              <Badge variant="outline" className="text-muted-foreground">
+                not configured
+              </Badge>
+            )}
+          </CardAction>
+          <CardDescription>
+            The GitHub App (dispatch + on-merge webhooks) is configured via Worker secrets at deploy
+            time — see the CI integration docs.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>AI providers</CardTitle>
+          <CardDescription>
+            Bring your own key. Provider + model + key are stored per org (key encrypted at rest);
+            the default provider is used to draft flows from a project's source repo.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {providers.length > 0 && (
+            <div className="rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Provider</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Key</TableHead>
+                    <TableHead>Default</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {providers.map((p) => (
+                    <TableRow key={p.id}>
+                      <TableCell>{p.name}</TableCell>
+                      <TableCell className="font-mono text-sm">{p.model}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {p.hasKey ? 'set' : '—'}
+                      </TableCell>
+                      <TableCell>
+                        {p.isDefault ? (
+                          <Badge className={connectedBadge}>default</Badge>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setDefaultProvider(p.id)}
+                          >
+                            Make default
+                          </Button>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => removeProvider(p.id)}
+                        >
+                          Delete
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+          <div className="max-w-md space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="ai-provider">Provider</Label>
+              <Select
+                value={aiName}
+                onValueChange={(v) => setAiName(v as AiProvider['name'])}
+              >
+                <SelectTrigger id="ai-provider" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
+                  <SelectItem value="openai">OpenAI</SelectItem>
+                  <SelectItem value="workers_ai">Cloudflare Workers AI</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="ai-model">Model</Label>
+              <Input
+                id="ai-model"
+                value={aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
+                placeholder="claude-opus-4-8"
+              />
+            </div>
+            {aiName !== 'workers_ai' && (
+              <div className="space-y-2">
+                <Label htmlFor="ai-key">API key</Label>
+                <Input
+                  id="ai-key"
+                  type="password"
+                  value={aiKey}
+                  onChange={(e) => setAiKey(e.target.value)}
+                  placeholder="sk-… / xai-…"
+                />
+              </div>
+            )}
+            {aiName === 'workers_ai' && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="ai-account">Cloudflare account ID</Label>
+                  <Input
+                    id="ai-account"
+                    value={aiAccount}
+                    onChange={(e) => setAiAccount(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ai-token">API token</Label>
+                  <Input
+                    id="ai-token"
+                    type="password"
+                    value={aiKey}
+                    onChange={(e) => setAiKey(e.target.value)}
+                  />
+                </div>
+              </>
             )}
           </div>
-        </div>
-      </section>
-
-      <section style={{ marginTop: '1.5rem' }}>
-        <div className={styles.head}>
-          <h2>GitHub</h2>
-          <span className={status?.github.connected ? styles.connected : 'muted'}>
-            {status?.github.connected ? 'configured' : 'not configured'}
-          </span>
-        </div>
-        <p className="muted">
-          The GitHub App (dispatch + on-merge webhooks) is configured via Worker secrets at deploy
-          time — see the CI integration docs.
-        </p>
-      </section>
-
-      <section style={{ marginTop: '1.5rem' }}>
-        <div className={styles.head}>
-          <h2>AI providers</h2>
-        </div>
-        <p className="muted">
-          Bring your own key. Provider + model + key are stored per org (key encrypted at rest); the
-          default provider is used to draft flows from a project's source repo.
-        </p>
-        {providers.length > 0 && (
-          <div className="card" style={{ marginBottom: '0.75rem' }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Provider</th>
-                  <th>Model</th>
-                  <th>Key</th>
-                  <th>Default</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {providers.map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.name}</td>
-                    <td className="mono">{p.model}</td>
-                    <td className="muted">{p.hasKey ? 'set' : '—'}</td>
-                    <td>
-                      {p.isDefault ? (
-                        <span className={styles.connected}>default</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={() => setDefaultProvider(p.id)}
-                        >
-                          Make default
-                        </button>
-                      )}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <button
-                        type="button"
-                        className="btn btn-danger"
-                        onClick={() => removeProvider(p.id)}
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <div className={`card ${styles.form}`}>
-          <label className={styles.field}>
-            <span>Provider</span>
-            <select
-              value={aiName}
-              onChange={(e) => setAiName(e.target.value as AiProvider['name'])}
-            >
-              <option value="anthropic">Anthropic (Claude)</option>
-              <option value="openai">OpenAI</option>
-              <option value="workers_ai">Cloudflare Workers AI</option>
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span>Model</span>
-            <input
-              value={aiModel}
-              onChange={(e) => setAiModel(e.target.value)}
-              placeholder="claude-opus-4-8"
-            />
-          </label>
-          {aiName !== 'workers_ai' && (
-            <label className={styles.field}>
-              <span>API key</span>
-              <input
-                type="password"
-                value={aiKey}
-                onChange={(e) => setAiKey(e.target.value)}
-                placeholder="sk-… / xai-…"
-              />
-            </label>
-          )}
-          {aiName === 'workers_ai' && (
-            <>
-              <label className={styles.field}>
-                <span>Cloudflare account ID</span>
-                <input value={aiAccount} onChange={(e) => setAiAccount(e.target.value)} />
-              </label>
-              <label className={styles.field}>
-                <span>API token</span>
-                <input type="password" value={aiKey} onChange={(e) => setAiKey(e.target.value)} />
-              </label>
-            </>
-          )}
-          <div className={styles.actions}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy || !aiModel}
-              onClick={addProvider}
-            >
-              Add provider
-            </button>
-          </div>
-        </div>
-      </section>
+        </CardContent>
+        <CardFooter>
+          <Button type="button" disabled={busy || !aiModel} onClick={addProvider}>
+            Add provider
+          </Button>
+        </CardFooter>
+      </Card>
     </div>
   )
 }

@@ -1,11 +1,29 @@
+import { AlertCircleIcon, ArrowLeftIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { PageHeader } from '@/components/page-header'
 import { StepEditor } from '@/components/StepEditor'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { ApiError, api } from '@/lib/api'
 import { deserializeStep, type EditableStep, makeStep, serializeStep } from '@/lib/steps'
-import styles from './FlowEditorView.module.css'
 
 type Profile = '' | 'smoke' | 'load' | 'stress'
+
+// Radix Select cannot use an empty-string item value, so "none" is stored as a
+// sentinel in the trigger and mapped back to '' for the actual state.
+const PROFILE_NONE = '__none__'
 
 export function FlowEditorView() {
   const params = useParams<{ projectId?: string; id?: string }>()
@@ -97,70 +115,116 @@ export function FlowEditorView() {
     !busy && engines.length > 0 && steps.length > 0 && (isEdit || name.trim().length > 0)
 
   return (
-    <div className="container">
-      <Link to={backTo} className={`muted ${styles.back}`}>
-        ← Back
-      </Link>
-      <h1>{isEdit ? `Edit flow: ${name}` : 'New flow'}</h1>
-      {isEdit && (
-        <p className="muted">Saving creates a new version with a diff against the current one.</p>
-      )}
+    <div className="space-y-6">
+      <Button asChild variant="ghost" size="sm" className="-ml-2 w-fit">
+        <Link to={backTo}>
+          <ArrowLeftIcon /> Back
+        </Link>
+      </Button>
 
-      {error && <p className="error">{error}</p>}
+      <PageHeader
+        title={isEdit ? `Edit flow: ${name}` : 'New flow'}
+        description={
+          isEdit
+            ? 'Saving creates a new version with a diff against the current one.'
+            : undefined
+        }
+      />
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircleIcon />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
       {details != null && (
-        <pre className={`error ${styles.details}`}>{JSON.stringify(details, null, 2)}</pre>
+        <pre className="bg-muted text-muted-foreground w-full overflow-x-auto rounded-lg p-3 text-xs whitespace-pre-wrap">
+          {JSON.stringify(details, null, 2)}
+        </pre>
       )}
 
-      <div className={`card ${styles.meta}`}>
-        {!isEdit && (
-          <label className={styles.field}>
-            <span>Name</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="checkout" />
-          </label>
-        )}
-        <label className={styles.field}>
-          <span>Description</span>
-          <input value={description} onChange={(e) => setDescription(e.target.value)} />
-        </label>
-        <div className={styles.field}>
-          <span>Engines</span>
-          <div className={styles.engines}>
-            <label>
-              <input
-                type="checkbox"
-                checked={engines.includes('playwright')}
-                onChange={() => toggleEngine('playwright')}
-              />{' '}
-              playwright
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={engines.includes('k6')}
-                onChange={() => toggleEngine('k6')}
-              />{' '}
-              k6
-            </label>
+      <Card>
+        <CardHeader>
+          <CardTitle>Flow details</CardTitle>
+        </CardHeader>
+        <CardContent className="max-w-lg space-y-4">
+          {!isEdit && (
+            <div className="space-y-2">
+              <Label htmlFor="flow-name">Name</Label>
+              <Input
+                id="flow-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="checkout"
+              />
+            </div>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="flow-description">Description</Label>
+            <Input
+              id="flow-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
           </div>
-        </div>
-        <label className={styles.field}>
-          <span>Load profile (k6)</span>
-          <select value={profile} onChange={(e) => setProfile(e.target.value as Profile)}>
-            <option value="">none</option>
-            <option value="smoke">smoke</option>
-            <option value="load">load</option>
-            <option value="stress">stress</option>
-          </select>
-        </label>
-      </div>
+          <div className="space-y-2">
+            <Label>Engines</Label>
+            <div className="flex flex-wrap gap-6 pt-1">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="engine-playwright"
+                  checked={engines.includes('playwright')}
+                  onCheckedChange={() => toggleEngine('playwright')}
+                />
+                <Label htmlFor="engine-playwright" className="font-normal">
+                  playwright
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="engine-k6"
+                  checked={engines.includes('k6')}
+                  onCheckedChange={() => toggleEngine('k6')}
+                />
+                <Label htmlFor="engine-k6" className="font-normal">
+                  k6
+                </Label>
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="flow-profile">Load profile (k6)</Label>
+            <Select
+              value={profile || PROFILE_NONE}
+              onValueChange={(v) => setProfile((v === PROFILE_NONE ? '' : v) as Profile)}
+            >
+              <SelectTrigger id="flow-profile" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={PROFILE_NONE}>none</SelectItem>
+                <SelectItem value="smoke">smoke</SelectItem>
+                <SelectItem value="load">load</SelectItem>
+                <SelectItem value="stress">stress</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
 
-      <h2>Steps</h2>
-      <StepEditor value={steps} onChange={setSteps} />
+      <Card>
+        <CardHeader>
+          <CardTitle>Steps</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <StepEditor value={steps} onChange={setSteps} />
+        </CardContent>
+      </Card>
 
-      <div className={styles.saveBar}>
-        <button type="button" className="btn btn-primary" disabled={!canSave} onClick={save}>
+      <div>
+        <Button type="button" disabled={!canSave} onClick={save}>
           {isEdit ? 'Save new version' : 'Create flow'}
-        </button>
+        </Button>
       </div>
     </div>
   )

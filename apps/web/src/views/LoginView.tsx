@@ -1,5 +1,8 @@
+import { AlertCircleIcon } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
-import styles from './LoginView.module.css'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 const ERROR_MESSAGES: Record<string, string> = {
   domain_not_allowed: 'Your email domain is not permitted to access this Charlie instance.',
@@ -25,26 +28,38 @@ export function LoginView() {
   const devUrl = `/api/auth/dev?redirect=${encodeURIComponent(redirect)}`
 
   return (
-    <div className={styles.wrap}>
-      <div className={`card ${styles.card}`}>
-        <div className={styles.logo}>🅲</div>
-        <h1 className={styles.title}>Charlie</h1>
-        <p className="muted">End-to-end and load testing for any web application.</p>
+    <div className="flex min-h-svh items-center justify-center p-6">
+      <Card className="w-full max-w-sm">
+        <CardHeader className="items-center text-center">
+          <div className="bg-primary text-primary-foreground mx-auto mb-2 flex size-12 items-center justify-center rounded-xl text-2xl font-semibold">
+            C
+          </div>
+          <CardTitle className="text-2xl">Charlie</CardTitle>
+          <CardDescription>End-to-end and load testing for any web application.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {errorMessage && (
+            <Alert variant="destructive">
+              <AlertCircleIcon />
+              <AlertDescription>{errorMessage}</AlertDescription>
+            </Alert>
+          )}
 
-        {errorMessage && <p className="error">{errorMessage}</p>}
+          <Button asChild className="w-full">
+            <a href={startUrl}>Continue with Google</a>
+          </Button>
 
-        <a className={`btn btn-primary ${styles.google}`} href={startUrl}>
-          Continue with Google
-        </a>
+          {isLocal && (
+            <Button asChild variant="outline" className="w-full">
+              <a href={devUrl}>Dev login (local)</a>
+            </Button>
+          )}
 
-        {isLocal && (
-          <a className={`btn ${styles.google}`} href={devUrl}>
-            Dev login (local)
-          </a>
-        )}
-
-        <p className={`muted ${styles.fine}`}>Access is restricted to allowed email domains.</p>
-      </div>
+          <p className="text-muted-foreground text-center text-xs">
+            Access is restricted to allowed email domains.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   )
 }

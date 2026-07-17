@@ -1,7 +1,19 @@
+import { AlertCircleIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/auth/AuthContext'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { ApiError, api } from '@/lib/api'
-import styles from './EnvironmentPanel.module.css'
+import { cn } from '@/lib/utils'
 
 interface Environment {
   id: string
@@ -128,133 +140,164 @@ export function EnvironmentPanel({ projectId }: { projectId: string }) {
   }
 
   return (
-    <section>
-      <div className={styles.head}>
-        <h2>Environments</h2>
+    <Card>
+      <CardHeader>
+        <CardTitle>Environments</CardTitle>
         {can('flows.write') && (
-          <button type="button" className="btn" onClick={() => setShowForm((v) => !v)}>
-            {showForm ? 'Cancel' : 'Add environment'}
-          </button>
+          <CardAction>
+            <Button
+              type="button"
+              variant={showForm ? 'outline' : 'default'}
+              size="sm"
+              onClick={() => setShowForm((v) => !v)}
+            >
+              {showForm ? 'Cancel' : 'Add environment'}
+            </Button>
+          </CardAction>
         )}
-      </div>
-      {error && <p className="error">{error}</p>}
+      </CardHeader>
 
-      {showForm && (
-        <div className={`card ${styles.addForm}`}>
-          <label className={styles.field}>
-            <span>Name</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="qa" />
-          </label>
-          <label className={styles.field}>
-            <span>Base URL</span>
-            <input
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://qa.example.com"
-            />
-          </label>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={busy || !name || !baseUrl}
-            onClick={createEnv}
-          >
-            Create
-          </button>
-        </div>
-      )}
+      <CardContent className="space-y-4">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircleIcon />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-      {envs.length === 0 && <p className="muted">No environments yet.</p>}
-
-      {envs.map((env) => {
-        const d = draftFor(env.id)
-        return (
-          <div key={env.id} className={`card ${styles.env}`}>
-            <div className={styles.envHead}>
-              <div>
-                <strong>{env.name}</strong>
-                <span className="muted"> — {env.baseUrl}</span>
-              </div>
-              {can('projects.delete') && (
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  disabled={busy}
-                  onClick={() => removeEnv(env)}
-                >
-                  Delete
-                </button>
-              )}
+        {showForm && (
+          <div className="max-w-md space-y-4 rounded-lg border p-4">
+            <div className="space-y-2">
+              <Label htmlFor="env-name">Name</Label>
+              <Input
+                id="env-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="qa"
+              />
             </div>
-
-            <div className={styles.secrets}>
-              <div className={styles.secretsTitle}>Secrets</div>
-              {Object.keys(env.secrets).length === 0 && d.adds.length === 0 && (
-                <div className="muted">None set.</div>
-              )}
-              <ul className={styles.secretList}>
-                {Object.entries(env.secrets).map(([secretName, mask]) => (
-                  <li key={secretName}>
-                    <code className={d.removes.includes(secretName) ? styles.struck : undefined}>
-                      {secretName}
-                    </code>
-                    <span className="muted">{mask}</span>
-                    {can('secrets.manage') && (
-                      <button
-                        type="button"
-                        className={`btn ${styles.tiny} btn-danger`}
-                        onClick={() => toggleRemove(env.id, secretName)}
-                      >
-                        {d.removes.includes(secretName) ? 'undo' : 'remove'}
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-
-              {can('secrets.manage') ? (
-                <>
-                  {d.adds.map((row, i) => (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: rows are positional and transient
-                    <div key={i} className={styles.secretAdd}>
-                      <input
-                        value={row.k}
-                        onChange={(e) => editRow(env.id, i, 'k', e.target.value)}
-                        placeholder="SECRET_NAME"
-                      />
-                      <input
-                        value={row.v}
-                        onChange={(e) => editRow(env.id, i, 'v', e.target.value)}
-                        placeholder="value (write-only)"
-                        type="password"
-                      />
-                    </div>
-                  ))}
-                  <div className={styles.secretButtons}>
-                    <button
-                      type="button"
-                      className={`btn ${styles.tiny}`}
-                      onClick={() => addRow(env.id)}
-                    >
-                      + Add secret
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn ${styles.tiny} btn-primary`}
-                      disabled={busy}
-                      onClick={() => saveSecrets(env)}
-                    >
-                      Save secrets
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <p className={`muted ${styles.fine}`}>Secret values are managed by admins.</p>
-              )}
+            <div className="space-y-2">
+              <Label htmlFor="env-base-url">Base URL</Label>
+              <Input
+                id="env-base-url"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://qa.example.com"
+              />
             </div>
+            <Button type="button" disabled={busy || !name || !baseUrl} onClick={createEnv}>
+              Create
+            </Button>
           </div>
-        )
-      })}
-    </section>
+        )}
+
+        {envs.length === 0 && (
+          <p className="text-muted-foreground text-sm">No environments yet.</p>
+        )}
+
+        {envs.map((env) => {
+          const d = draftFor(env.id)
+          return (
+            <div key={env.id} className="space-y-3 rounded-lg border p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm">
+                  <strong className="font-medium">{env.name}</strong>
+                  <span className="text-muted-foreground"> — {env.baseUrl}</span>
+                </div>
+                {can('projects.delete') && (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => removeEnv(env)}
+                  >
+                    Delete
+                  </Button>
+                )}
+              </div>
+
+              <div className="space-y-2 border-t pt-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Secrets
+                </div>
+                {Object.keys(env.secrets).length === 0 && d.adds.length === 0 && (
+                  <div className="text-muted-foreground text-sm">None set.</div>
+                )}
+                <ul className="space-y-1">
+                  {Object.entries(env.secrets).map(([secretName, mask]) => (
+                    <li key={secretName} className="flex items-center gap-2">
+                      <code
+                        className={cn(
+                          'text-sm',
+                          d.removes.includes(secretName) && 'line-through opacity-50',
+                        )}
+                      >
+                        {secretName}
+                      </code>
+                      <span className="text-muted-foreground text-sm">{mask}</span>
+                      {can('secrets.manage') && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          className="text-destructive"
+                          onClick={() => toggleRemove(env.id, secretName)}
+                        >
+                          {d.removes.includes(secretName) ? 'undo' : 'remove'}
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+
+                {can('secrets.manage') ? (
+                  <>
+                    {d.adds.map((row, i) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: rows are positional and transient
+                      <div key={i} className="flex gap-2">
+                        <Input
+                          value={row.k}
+                          onChange={(e) => editRow(env.id, i, 'k', e.target.value)}
+                          placeholder="SECRET_NAME"
+                        />
+                        <Input
+                          value={row.v}
+                          onChange={(e) => editRow(env.id, i, 'v', e.target.value)}
+                          placeholder="value (write-only)"
+                          type="password"
+                        />
+                      </div>
+                    ))}
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => addRow(env.id)}
+                      >
+                        + Add secret
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => saveSecrets(env)}
+                      >
+                        Save secrets
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-muted-foreground text-xs">
+                    Secret values are managed by admins.
+                  </p>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </CardContent>
+    </Card>
   )
 }

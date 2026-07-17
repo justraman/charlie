@@ -1,8 +1,22 @@
+import { AlertCircleIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
+import { PageHeader } from '@/components/page-header'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { ApiError, api } from '@/lib/api'
-import styles from './ProjectsView.module.css'
 
 interface Project {
   id: string
@@ -58,83 +72,104 @@ export function ProjectsView() {
   }
 
   return (
-    <div className="container">
-      <div className={styles.head}>
-        <h1>Projects</h1>
-        {can('flows.write') && (
-          <button type="button" className="btn btn-primary" onClick={() => setShowForm((v) => !v)}>
-            {showForm ? 'Cancel' : 'New project'}
-          </button>
-        )}
-      </div>
-      {error && <p className="error">{error}</p>}
+    <div className="space-y-6">
+      <PageHeader
+        title="Projects"
+        description="Browse and author projects, environments, and flows."
+        actions={
+          can('flows.write') && (
+            <Button
+              type="button"
+              variant={showForm ? 'outline' : 'default'}
+              onClick={() => setShowForm((v) => !v)}
+            >
+              {showForm ? 'Cancel' : 'New project'}
+            </Button>
+          )
+        }
+      />
 
-      {showForm && (
-        <div className={`card ${styles.form}`}>
-          <label className={styles.field}>
-            <span>Name</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Storefront"
-            />
-          </label>
-          <label className={styles.field}>
-            <span>Description</span>
-            <input value={description} onChange={(e) => setDescription(e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span>Source repo (optional)</span>
-            <input
-              value={sourceRepo}
-              onChange={(e) => setSourceRepo(e.target.value)}
-              placeholder="acme/storefront"
-            />
-          </label>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={busy || !name.trim()}
-            onClick={create}
-          >
-            Create
-          </button>
-        </div>
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircleIcon />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
 
-      <div className="card">
-        <table>
-          <thead>
-            <tr>
-              <th>Project</th>
-              <th>Slug</th>
-              <th>Source repo</th>
-            </tr>
-          </thead>
-          <tbody>
+      {showForm && (
+        <Card className="max-w-lg">
+          <CardHeader>
+            <CardTitle>New project</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="project-name">Name</Label>
+              <Input
+                id="project-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Storefront"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-description">Description</Label>
+              <Input
+                id="project-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-source-repo">Source repo (optional)</Label>
+              <Input
+                id="project-source-repo"
+                value={sourceRepo}
+                onChange={(e) => setSourceRepo(e.target.value)}
+                placeholder="acme/storefront"
+              />
+            </div>
+            <Button type="button" disabled={busy || !name.trim()} onClick={create}>
+              Create
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Project</TableHead>
+              <TableHead>Slug</TableHead>
+              <TableHead>Source repo</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {projects.length === 0 && (
-              <tr>
-                <td colSpan={3} className="muted">
+              <TableRow>
+                <TableCell colSpan={3} className="text-muted-foreground text-center">
                   No projects yet.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
             {projects.map((p) => (
-              <tr key={p.id}>
-                <td>
-                  <Link to={`/projects/${p.id}`}>
-                    <strong>{p.name}</strong>
+              <TableRow key={p.id}>
+                <TableCell>
+                  <Link to={`/projects/${p.id}`} className="font-medium hover:underline">
+                    {p.name}
                   </Link>
-                  <div className="muted">{p.description}</div>
-                </td>
-                <td>
-                  <code>{p.slug}</code>
-                </td>
-                <td className="muted">{p.sourceRepo || '—'}</td>
-              </tr>
+                  {p.description && (
+                    <div className="text-muted-foreground text-sm">{p.description}</div>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <code className="bg-muted rounded px-1.5 py-0.5 text-xs">{p.slug}</code>
+                </TableCell>
+                <TableCell className="text-muted-foreground">{p.sourceRepo || '—'}</TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   )

@@ -1,12 +1,33 @@
+import { AlertCircleIcon, ArrowLeftIcon, PlusIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
 import { EnvironmentPanel } from '@/components/EnvironmentPanel'
+import { PageHeader } from '@/components/page-header'
 import { RunTriggerPanel } from '@/components/RunTriggerPanel'
 import { SchedulesPanel } from '@/components/SchedulesPanel'
 import { SuggestedFlowsPanel } from '@/components/SuggestedFlowsPanel'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { ApiError, api } from '@/lib/api'
-import styles from './ProjectDetailView.module.css'
 
 interface Project {
   id: string
@@ -63,118 +84,140 @@ export function ProjectDetailView() {
   }, [load])
 
   return (
-    <div className="container">
-      {error && <p className="error">{error}</p>}
+    <div className="space-y-6">
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircleIcon />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
       {project && (
-        <div>
-          <Link to="/projects" className={`muted ${styles.back}`}>
-            ← Projects
-          </Link>
-          <h1>{project.name}</h1>
-          <p className="muted">
-            <code>{project.slug}</code>
-            {project.description && <span> — {project.description}</span>}
-            {project.sourceRepo && <span> · source: {project.sourceRepo}</span>}
-          </p>
+        <div className="space-y-6">
+          <Button asChild variant="ghost" size="sm" className="-ml-2 w-fit">
+            <Link to="/projects">
+              <ArrowLeftIcon />
+              Projects
+            </Link>
+          </Button>
+
+          <PageHeader
+            title={project.name}
+            description={
+              <span className="flex flex-wrap items-center gap-x-2">
+                <code className="bg-muted rounded px-1.5 py-0.5 text-xs">{project.slug}</code>
+                {project.description && <span>— {project.description}</span>}
+                {project.sourceRepo && <span>· source: {project.sourceRepo}</span>}
+              </span>
+            }
+          />
 
           {projectId && <EnvironmentPanel projectId={projectId} />}
 
-          <section className={styles.flows}>
-            <div className={styles.head}>
-              <h2>Flows</h2>
+          <Card>
+            <CardHeader>
+              <CardTitle>Flows</CardTitle>
               {can('flows.write') && (
-                <Link className="btn btn-primary" to={`/projects/${projectId}/flows/new`}>
-                  New flow
-                </Link>
+                <CardAction>
+                  <Button asChild size="sm">
+                    <Link to={`/projects/${projectId}/flows/new`}>
+                      <PlusIcon />
+                      New flow
+                    </Link>
+                  </Button>
+                </CardAction>
               )}
-            </div>
-            <div className="card">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Flow</th>
-                    <th>Engines</th>
-                    <th>Version</th>
-                    <th>Origin</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Flow</TableHead>
+                    <TableHead>Engines</TableHead>
+                    <TableHead>Version</TableHead>
+                    <TableHead>Origin</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {flows.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="muted">
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-muted-foreground text-center">
                         No flows yet.
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   )}
                   {flows.map((fl) => (
-                    <tr key={fl.id}>
-                      <td>
-                        <strong>{fl.name}</strong>
-                      </td>
-                      <td>
-                        {fl.engines.map((e) => (
-                          <span key={e} className={`badge ${styles.badge}`}>
-                            {e}
-                          </span>
-                        ))}
-                      </td>
-                      <td className="muted">v{fl.currentVersion}</td>
-                      <td className="muted">{fl.origin}</td>
-                      <td className={styles.right}>
-                        <Link className={`btn ${styles.tiny}`} to={`/flows/${fl.id}/edit`}>
-                          Edit
-                        </Link>
-                        <Link className={`btn ${styles.tiny}`} to={`/flows/${fl.id}/history`}>
-                          History
-                        </Link>
-                      </td>
-                    </tr>
+                    <TableRow key={fl.id}>
+                      <TableCell className="font-medium">{fl.name}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {fl.engines.map((e) => (
+                            <Badge key={e} variant="secondary">
+                              {e}
+                            </Badge>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">v{fl.currentVersion}</TableCell>
+                      <TableCell className="text-muted-foreground">{fl.origin}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button asChild variant="outline" size="sm">
+                            <Link to={`/flows/${fl.id}/edit`}>Edit</Link>
+                          </Button>
+                          <Button asChild variant="outline" size="sm">
+                            <Link to={`/flows/${fl.id}/history`}>History</Link>
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
 
-          <section className={styles.flows}>
-            <div className={styles.head}>
-              <h2>Suggested flows (AI)</h2>
-            </div>
+          <section className="space-y-4">
+            <h2 className="text-lg font-semibold">Suggested flows (AI)</h2>
             {projectId && <SuggestedFlowsPanel projectId={projectId} />}
           </section>
 
-          <section className={styles.flows}>
-            <div className={styles.head}>
-              <h2>Schedules</h2>
-            </div>
+          <section className="space-y-4">
+            <h2 className="text-lg font-semibold">Schedules</h2>
             {can('flows.write') && (
-              <p className="muted" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <span>Default Slack channel for scheduled/merge reports:</span>
-                <input
+              <div className="flex flex-wrap items-center gap-2">
+                <Label htmlFor="slack-channel" className="text-muted-foreground font-normal">
+                  Default Slack channel for scheduled/merge reports:
+                </Label>
+                <Input
+                  id="slack-channel"
                   value={channel}
                   onChange={(e) => setChannel(e.target.value)}
                   placeholder="#qa-runs or channel ID"
-                  style={{ padding: '0.3rem 0.5rem' }}
+                  className="w-auto"
                 />
-                <button type="button" className="btn" onClick={saveChannel}>
+                <Button type="button" variant="outline" onClick={saveChannel}>
                   Save
-                </button>
-              </p>
+                </Button>
+              </div>
             )}
             {projectId && <SchedulesPanel projectId={projectId} />}
           </section>
 
-          <section className={styles.flows}>
-            <div className={styles.head}>
-              <h2>Runs</h2>
-              <Link className="btn" to="/runs">
-                All runs
-              </Link>
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Runs</h2>
+              <Button asChild variant="outline" size="sm">
+                <Link to="/runs">All runs</Link>
+              </Button>
             </div>
             {can('runs.trigger') ? (
               projectId && <RunTriggerPanel projectId={projectId} />
             ) : (
-              <p className="muted">You need editor access to trigger runs.</p>
+              <p className="text-muted-foreground text-sm">
+                You need editor access to trigger runs.
+              </p>
             )}
           </section>
         </div>

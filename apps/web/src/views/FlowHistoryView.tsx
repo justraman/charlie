@@ -1,7 +1,13 @@
+import { AlertCircleIcon, ArrowLeftIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { PageHeader } from '@/components/page-header'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ApiError, api } from '@/lib/api'
-import styles from './FlowHistoryView.module.css'
+import { cn } from '@/lib/utils'
 
 interface Version {
   id: string
@@ -56,43 +62,78 @@ export function FlowHistoryView() {
   }
 
   return (
-    <div className="container">
-      <Link to={backTo} className={`muted ${styles.back}`}>
-        ← Back
-      </Link>
-      <h1>History: {flowName}</h1>
-      {error && <p className="error">{error}</p>}
+    <div className="space-y-6">
+      <PageHeader
+        title={`History: ${flowName}`}
+        description="Version and audit history for this flow."
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link to={backTo}>
+              <ArrowLeftIcon /> Back
+            </Link>
+          </Button>
+        }
+      />
 
-      <div className={styles.layout}>
-        <div className={`card ${styles.list}`}>
-          {versions.map((v) => (
-            <button
-              type="button"
-              key={v.id}
-              className={`${styles.version} ${selected?.version === v.version ? styles.active : ''}`}
-              onClick={() => view(v)}
-            >
-              <div className={styles.versionHead}>
-                <strong>v{v.version}</strong>
-                {v.isCurrent && <span className="badge owner">current</span>}
-                <span className={`muted ${styles.when}`}>{fmt(v.createdAt)}</span>
-              </div>
-              <div className="muted">{v.authorName || v.authorEmail || 'unknown'}</div>
-              <div className={styles.diff}>{v.diffSummary}</div>
-            </button>
-          ))}
-        </div>
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircleIcon />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
-        <div className={`card ${styles.detail}`}>
+      <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
+        <Card>
+          <CardContent className="space-y-1 p-2">
+            {versions.length === 0 ? (
+              <p className="text-muted-foreground p-3 text-sm">No versions yet.</p>
+            ) : (
+              versions.map((v) => (
+                <button
+                  type="button"
+                  key={v.id}
+                  onClick={() => view(v)}
+                  className={cn(
+                    'block w-full rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors',
+                    'hover:bg-accent/50',
+                    selected?.version === v.version && 'border-ring/60 bg-accent/50',
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <strong className="text-sm">v{v.version}</strong>
+                    {v.isCurrent && <Badge variant="secondary">current</Badge>}
+                    <span className="text-muted-foreground ml-auto text-xs">{fmt(v.createdAt)}</span>
+                  </div>
+                  <div className="text-muted-foreground mt-0.5 text-sm">
+                    {v.authorName || v.authorEmail || 'unknown'}
+                  </div>
+                  {v.diffSummary && (
+                    <div className="text-muted-foreground mt-1 text-xs">{v.diffSummary}</div>
+                  )}
+                </button>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
           {!selected ? (
-            <p className="muted">Select a version to view its steps.</p>
+            <CardContent>
+              <p className="text-muted-foreground text-sm">Select a version to view its steps.</p>
+            </CardContent>
           ) : (
             <>
-              <h3>v{selected.version} steps</h3>
-              <pre>{JSON.stringify(selected.steps, null, 2)}</pre>
+              <CardHeader>
+                <CardTitle>v{selected.version} steps</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <pre className="bg-muted overflow-x-auto rounded-lg p-3 text-xs whitespace-pre-wrap">
+                  {JSON.stringify(selected.steps, null, 2)}
+                </pre>
+              </CardContent>
             </>
           )}
-        </div>
+        </Card>
       </div>
     </div>
   )

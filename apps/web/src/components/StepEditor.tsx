@@ -1,3 +1,4 @@
+import { ArrowDownIcon, ArrowUpIcon, PlusIcon, XIcon } from 'lucide-react'
 import {
   ACTION_FIELDS,
   type EditableStep,
@@ -5,12 +6,26 @@ import {
   STEP_ACTIONS,
   type StepAction,
 } from '@/lib/steps'
-import styles from './StepEditor.module.css'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 
 interface Props {
   value: EditableStep[]
   onChange: (next: EditableStep[]) => void
 }
+
+// Radix Select cannot use an empty-string item value, so the "none" option is
+// stored as a sentinel in the trigger and mapped back to '' for the step field.
+const FIELD_NONE = '__none__'
 
 export function StepEditor({ value, onChange }: Props) {
   function replaceAt(i: number, step: EditableStep) {
@@ -42,71 +57,90 @@ export function StepEditor({ value, onChange }: Props) {
   }
 
   return (
-    <div className={styles.steps}>
+    <div className="space-y-3">
       {value.map((step, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: steps are an ordered positional list
-        <div key={i} className={styles.step}>
-          <div className={styles.stepHead}>
-            <span className={styles.idx}>{i + 1}</span>
-            <select
+        <div key={i} className="bg-muted/40 space-y-3 rounded-lg border p-3">
+          <div className="flex items-center gap-2">
+            <span className="bg-background flex size-6 shrink-0 items-center justify-center rounded-full border text-xs">
+              {i + 1}
+            </span>
+            <Select
               value={step.action}
-              onChange={(e) => changeAction(i, e.target.value as StepAction)}
+              onValueChange={(v) => changeAction(i, v as StepAction)}
             >
-              {STEP_ACTIONS.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-            <div className={styles.stepActions}>
-              <button
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STEP_ACTIONS.map((a) => (
+                  <SelectItem key={a} value={a}>
+                    {a}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="ml-auto flex gap-1">
+              <Button
                 type="button"
-                className={`btn ${styles.tiny}`}
+                variant="outline"
+                size="icon-sm"
                 disabled={i === 0}
                 onClick={() => move(i, -1)}
+                aria-label="Move up"
                 title="Move up"
               >
-                ↑
-              </button>
-              <button
+                <ArrowUpIcon />
+              </Button>
+              <Button
                 type="button"
-                className={`btn ${styles.tiny}`}
+                variant="outline"
+                size="icon-sm"
                 disabled={i === value.length - 1}
                 onClick={() => move(i, 1)}
+                aria-label="Move down"
                 title="Move down"
               >
-                ↓
-              </button>
-              <button
+                <ArrowDownIcon />
+              </Button>
+              <Button
                 type="button"
-                className={`btn ${styles.tiny} btn-danger`}
+                variant="destructive"
+                size="icon-sm"
                 onClick={() => removeStep(i)}
+                aria-label="Remove"
                 title="Remove"
               >
-                ✕
-              </button>
+                <XIcon />
+              </Button>
             </div>
           </div>
-          <div className={styles.fields}>
+          <div className="flex flex-wrap items-end gap-4">
             {ACTION_FIELDS[step.action].map((f) => {
               const fieldId = `step-${i}-${f.key}`
               return (
-                <label key={f.key} className={styles.field} htmlFor={fieldId}>
-                  <span>{f.label}</span>
+                <div key={f.key} className="min-w-[200px] flex-1 space-y-2">
+                  <Label htmlFor={fieldId}>{f.label}</Label>
                   {f.type === 'select' ? (
-                    <select
-                      id={fieldId}
-                      value={(step[f.key] as string) ?? ''}
-                      onChange={(e) => setField(i, f.key, e.target.value)}
+                    <Select
+                      value={((step[f.key] as string) ?? '') || FIELD_NONE}
+                      onValueChange={(v) =>
+                        setField(i, f.key, v === FIELD_NONE ? '' : v)
+                      }
                     >
-                      {f.options?.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt || '—'}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger id={fieldId} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {f.options?.map((opt) => (
+                          <SelectItem key={opt} value={opt || FIELD_NONE}>
+                            {opt || '—'}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   ) : (
-                    <input
+                    <Input
                       id={fieldId}
                       type={f.type === 'number' ? 'number' : 'text'}
                       value={(step[f.key] as string) ?? ''}
@@ -114,24 +148,26 @@ export function StepEditor({ value, onChange }: Props) {
                       onChange={(e) => setField(i, f.key, e.target.value)}
                     />
                   )}
-                </label>
+                </div>
               )
             })}
-            <label className={`${styles.field} ${styles.capture}`}>
-              <input
-                type="checkbox"
+            <div className="flex items-center gap-2 py-2">
+              <Switch
+                id={`step-${i}-captureOnFail`}
                 checked={step.captureOnFail === true}
-                onChange={(e) => setField(i, 'captureOnFail', e.target.checked)}
+                onCheckedChange={(checked) => setField(i, 'captureOnFail', checked)}
               />
-              <span>Capture screenshot/trace on failure</span>
-            </label>
+              <Label htmlFor={`step-${i}-captureOnFail`} className="font-normal">
+                Capture screenshot/trace on failure
+              </Label>
+            </div>
           </div>
         </div>
       ))}
 
-      <button type="button" className="btn" onClick={addStep}>
-        + Add step
-      </button>
+      <Button type="button" variant="outline" onClick={addStep}>
+        <PlusIcon /> Add step
+      </Button>
     </div>
   )
 }

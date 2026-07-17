@@ -1,7 +1,19 @@
+import { AlertCircleIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { ApiError, api } from '@/lib/api'
-import styles from './RunTriggerPanel.module.css'
 
 interface Env {
   id: string
@@ -71,80 +83,97 @@ export function RunTriggerPanel({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className={`card ${styles.panel}`}>
-      {error && <p className="error">{error}</p>}
-      <label className={styles.field}>
-        <span>Environment</span>
-        <select value={environmentId} onChange={(e) => setEnvironmentId(e.target.value)}>
-          {envs.length === 0 && <option value="">no environments</option>}
-          {envs.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.name}
-            </option>
-          ))}
-        </select>
-      </label>
+    <Card className="max-w-md">
+      <CardContent className="space-y-4">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircleIcon />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-      <div className={styles.field}>
-        <span>Engine</span>
-        <div className={styles.engines}>
-          <label>
-            <input
-              type="radio"
-              name="engine"
-              checked={engine === 'playwright'}
-              onChange={() => setEngine('playwright')}
-            />{' '}
-            playwright (E2E)
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="engine"
-              checked={engine === 'k6'}
-              onChange={() => setEngine('k6')}
-            />{' '}
-            k6 (load)
-          </label>
+        <div className="space-y-2">
+          <Label htmlFor="run-environment">Environment</Label>
+          <Select value={environmentId} onValueChange={setEnvironmentId}>
+            <SelectTrigger id="run-environment" className="w-full">
+              <SelectValue placeholder="no environments" />
+            </SelectTrigger>
+            <SelectContent>
+              {envs.map((e) => (
+                <SelectItem key={e.id} value={e.id}>
+                  {e.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-      </div>
 
-      <div className={styles.field}>
-        <span>Flows (none selected = all eligible)</span>
-        <div className={styles.flows}>
-          {eligibleFlows.length === 0 && <span className="muted">No flows support {engine}.</span>}
-          {eligibleFlows.map((f) => (
-            <label key={f.id} className={styles.flow}>
-              <input
-                type="checkbox"
-                checked={selectedFlows.includes(f.name)}
-                onChange={() => toggleFlow(f.name)}
-              />
-              {f.name}
-            </label>
-          ))}
+        <div className="space-y-2">
+          <Label htmlFor="run-engine">Engine</Label>
+          <Select
+            value={engine}
+            onValueChange={(v) => setEngine(v as 'playwright' | 'k6')}
+          >
+            <SelectTrigger id="run-engine" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="playwright">playwright (E2E)</SelectItem>
+              <SelectItem value="k6">k6 (load)</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-      </div>
 
-      {engine === 'k6' && (
-        <label className={styles.field}>
-          <span>Profile</span>
-          <select value={profile} onChange={(e) => setProfile(e.target.value as typeof profile)}>
-            <option value="smoke">smoke</option>
-            <option value="load">load</option>
-            <option value="stress">stress</option>
-          </select>
-        </label>
-      )}
+        <div className="space-y-2">
+          <span className="text-sm font-medium leading-none">
+            Flows (none selected = all eligible)
+          </span>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {eligibleFlows.length === 0 && (
+              <span className="text-muted-foreground text-sm">No flows support {engine}.</span>
+            )}
+            {eligibleFlows.map((f) => (
+              <div key={f.id} className="flex items-center gap-2">
+                <Switch
+                  id={`run-flow-${f.id}`}
+                  checked={selectedFlows.includes(f.name)}
+                  onCheckedChange={() => toggleFlow(f.name)}
+                />
+                <Label htmlFor={`run-flow-${f.id}`} className="font-normal">
+                  {f.name}
+                </Label>
+              </div>
+            ))}
+          </div>
+        </div>
 
-      <button
-        type="button"
-        className="btn btn-primary"
-        disabled={busy || !environmentId || eligibleFlows.length === 0}
-        onClick={trigger}
-      >
-        Trigger run
-      </button>
-    </div>
+        {engine === 'k6' && (
+          <div className="space-y-2">
+            <Label htmlFor="run-profile">Profile</Label>
+            <Select
+              value={profile}
+              onValueChange={(v) => setProfile(v as typeof profile)}
+            >
+              <SelectTrigger id="run-profile" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="smoke">smoke</SelectItem>
+                <SelectItem value="load">load</SelectItem>
+                <SelectItem value="stress">stress</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        <Button
+          type="button"
+          disabled={busy || !environmentId || eligibleFlows.length === 0}
+          onClick={trigger}
+        >
+          Trigger run
+        </Button>
+      </CardContent>
+    </Card>
   )
 }

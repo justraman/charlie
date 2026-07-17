@@ -1,8 +1,46 @@
-import { useCallback, useEffect, useState } from 'react'
+import { AlertCircleIcon } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { ApiError, api } from '@/lib/api'
-import styles from './SchedulesPanel.module.css'
 
 interface Env {
   id: string
@@ -116,130 +154,157 @@ export function SchedulesPanel({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div>
-      {error && <p className="error">{error}</p>}
-      <div className="card">
-        <table>
-          <thead>
-            <tr>
-              <th>Trigger</th>
-              <th>Target</th>
-              <th>Next / watch</th>
-              <th>Last fired</th>
-              <th>Enabled</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {schedules.length === 0 && (
-              <tr>
-                <td colSpan={6} className="muted">
-                  No schedules yet.
-                </td>
-              </tr>
-            )}
-            {schedules.map((s) => (
-              <>
-                <tr key={s.id}>
-                  <td>
-                    <strong>{s.triggerType === 'cron' ? 'cron' : 'on merge'}</strong>
-                    {s.triggerType === 'cron' && (
-                      <div className={styles.sub}>
-                        <code>{s.cronExpr}</code>
-                      </div>
-                    )}
-                  </td>
-                  <td className="muted">
-                    {envName(s.environmentId)} · {s.engine}
-                    {s.engine === 'k6' ? ` (${s.profile})` : ''}
-                    <div className={styles.sub}>{s.flowSelection.join(', ')}</div>
-                  </td>
-                  <td className="muted">
-                    {s.triggerType === 'cron' ? fmt(s.nextDueAt) : `branch: ${s.watchBranch}`}
-                  </td>
-                  <td className="muted">{fmt(s.lastFiredAt)}</td>
-                  <td>
-                    {editable ? (
-                      <button
-                        type="button"
-                        className={`btn ${styles.tiny}`}
-                        onClick={() => toggle(s)}
-                      >
-                        {s.enabled ? 'on' : 'off'}
-                      </button>
-                    ) : (
-                      <span className={s.enabled ? styles.on : styles.off}>
-                        {s.enabled ? 'on' : 'off'}
-                      </span>
-                    )}
-                  </td>
-                  <td className={styles.right}>
-                    <button
-                      type="button"
-                      className={`btn ${styles.tiny}`}
-                      onClick={() => loadHistory(s.id)}
-                    >
-                      History
-                    </button>
-                    {editable && (
-                      <button
-                        type="button"
-                        className={`btn btn-danger ${styles.tiny}`}
-                        onClick={() => remove(s)}
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </td>
-                </tr>
-                {history[s.id] && (
-                  <tr key={`${s.id}-history`}>
-                    <td colSpan={6}>
-                      {history[s.id]!.length === 0 ? (
-                        <span className="muted">No runs yet.</span>
-                      ) : (
-                        <ul className={styles.history}>
-                          {history[s.id]!.map((r) => (
-                            <li key={r.id}>
-                              <Link to={`/runs/${r.id}`} className="mono">
-                                {r.id.slice(0, 8)}
-                              </Link>{' '}
-                              <span className="muted">
-                                {r.status} · {r.trigger}
-                                {r.commitSha ? ` · ${r.commitSha.slice(0, 7)}` : ''} ·{' '}
-                                {fmt(r.queuedAt)}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </td>
-                  </tr>
-                )}
-              </>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Schedules</CardTitle>
+        <CardDescription>Cron and on-merge test triggers for this project.</CardDescription>
+        {editable && (
+          <CardAction>
+            <Dialog open={showForm} onOpenChange={setShowForm}>
+              <DialogTrigger asChild>
+                <Button size="sm">New schedule</Button>
+              </DialogTrigger>
+              <DialogContent className="max-h-[85vh] overflow-y-auto">
+                <ScheduleForm
+                  projectId={projectId}
+                  envs={envs}
+                  flows={flows}
+                  onDone={async () => {
+                    setShowForm(false)
+                    await load()
+                  }}
+                  onCancel={() => setShowForm(false)}
+                />
+              </DialogContent>
+            </Dialog>
+          </CardAction>
+        )}
+      </CardHeader>
 
-      {editable &&
-        (showForm ? (
-          <ScheduleForm
-            projectId={projectId}
-            envs={envs}
-            flows={flows}
-            onDone={async () => {
-              setShowForm(false)
-              await load()
-            }}
-            onCancel={() => setShowForm(false)}
-          />
-        ) : (
-          <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
-            New schedule
-          </button>
-        ))}
-    </div>
+      <CardContent className="space-y-4">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircleIcon />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        <div className="rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Trigger</TableHead>
+                <TableHead>Target</TableHead>
+                <TableHead>Next / watch</TableHead>
+                <TableHead>Last fired</TableHead>
+                <TableHead>Enabled</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {schedules.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-muted-foreground text-center">
+                    No schedules yet.
+                  </TableCell>
+                </TableRow>
+              )}
+              {schedules.map((s) => (
+                <Fragment key={s.id}>
+                  <TableRow>
+                    <TableCell>
+                      <strong>{s.triggerType === 'cron' ? 'cron' : 'on merge'}</strong>
+                      {s.triggerType === 'cron' && (
+                        <div className="mt-0.5">
+                          <code className="bg-muted rounded px-1 py-0.5 font-mono text-xs">
+                            {s.cronExpr}
+                          </code>
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {envName(s.environmentId)} · {s.engine}
+                      {s.engine === 'k6' ? ` (${s.profile})` : ''}
+                      <div className="mt-0.5 text-xs">{s.flowSelection.join(', ')}</div>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {s.triggerType === 'cron' ? fmt(s.nextDueAt) : `branch: ${s.watchBranch}`}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{fmt(s.lastFiredAt)}</TableCell>
+                    <TableCell>
+                      {editable ? (
+                        <Switch
+                          checked={s.enabled}
+                          onCheckedChange={() => toggle(s)}
+                          aria-label={s.enabled ? 'Disable schedule' : 'Enable schedule'}
+                        />
+                      ) : (
+                        <Badge
+                          variant={s.enabled ? 'default' : 'outline'}
+                          className={
+                            s.enabled
+                              ? 'border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                              : 'text-muted-foreground'
+                          }
+                        >
+                          {s.enabled ? 'on' : 'off'}
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => loadHistory(s.id)}
+                        >
+                          History
+                        </Button>
+                        {editable && (
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => remove(s)}
+                          >
+                            Delete
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                  {history[s.id] && (
+                    <TableRow>
+                      <TableCell colSpan={6}>
+                        {history[s.id]!.length === 0 ? (
+                          <span className="text-muted-foreground">No runs yet.</span>
+                        ) : (
+                          <ul className="flex flex-col gap-1 py-1 pl-4 text-xs">
+                            {history[s.id]!.map((r) => (
+                              <li key={r.id}>
+                                <Link to={`/runs/${r.id}`} className="font-mono">
+                                  {r.id.slice(0, 8)}
+                                </Link>{' '}
+                                <span className="text-muted-foreground">
+                                  {r.status} · {r.trigger}
+                                  {r.commitSha ? ` · ${r.commitSha.slice(0, 7)}` : ''} ·{' '}
+                                  {fmt(r.queuedAt)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -301,123 +366,156 @@ function ScheduleForm({
   }
 
   return (
-    <div className={`card ${styles.form}`}>
-      {error && <p className="error">{error}</p>}
-      <label className={styles.field}>
-        <span>Trigger</span>
-        <select
-          value={triggerType}
-          onChange={(e) => setTriggerType(e.target.value as 'cron' | 'on_merge')}
-        >
-          <option value="cron">Cron interval</option>
-          <option value="on_merge">On merge to branch</option>
-        </select>
-      </label>
+    <>
+      <DialogHeader>
+        <DialogTitle>New schedule</DialogTitle>
+        <DialogDescription>
+          Configure a cron interval or on-merge trigger for this project.
+        </DialogDescription>
+      </DialogHeader>
 
-      {triggerType === 'cron' ? (
-        <label className={styles.field}>
-          <span>Schedule</span>
-          <select value={preset} onChange={(e) => setPreset(e.target.value)}>
-            {CRON_PRESETS.map((p) => (
-              <option key={p.expr} value={p.expr}>
-                {p.label}
-              </option>
-            ))}
-            <option value="custom">Custom…</option>
-          </select>
-          {preset === 'custom' && (
-            <input
-              type="text"
-              placeholder="minute hour day-of-month month day-of-week"
-              value={customCron}
-              onChange={(e) => setCustomCron(e.target.value)}
-            />
-          )}
-        </label>
-      ) : (
-        <label className={styles.field}>
-          <span>Watch branch (on the project's source repo)</span>
-          <input type="text" value={watchBranch} onChange={(e) => setWatchBranch(e.target.value)} />
-        </label>
-      )}
+      <div className="space-y-4">
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircleIcon />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-      <label className={styles.field}>
-        <span>Environment</span>
-        <select value={environmentId} onChange={(e) => setEnvironmentId(e.target.value)}>
-          {envs.length === 0 && <option value="">no environments</option>}
-          {envs.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.name}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <div className={styles.field}>
-        <span>Engine</span>
-        <div className={styles.engines}>
-          <label>
-            <input
-              type="radio"
-              name="sched-engine"
-              checked={engine === 'playwright'}
-              onChange={() => setEngine('playwright')}
-            />{' '}
-            playwright (E2E)
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="sched-engine"
-              checked={engine === 'k6'}
-              onChange={() => setEngine('k6')}
-            />{' '}
-            k6 (load)
-          </label>
+        <div className="space-y-2">
+          <Label htmlFor="sched-trigger">Trigger</Label>
+          <Select
+            value={triggerType}
+            onValueChange={(v) => setTriggerType(v as 'cron' | 'on_merge')}
+          >
+            <SelectTrigger id="sched-trigger" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cron">Cron interval</SelectItem>
+              <SelectItem value="on_merge">On merge to branch</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-      </div>
 
-      <div className={styles.field}>
-        <span>Flows (none selected = all eligible)</span>
-        <div className={styles.flows}>
-          {eligibleFlows.length === 0 && <span className="muted">No flows support {engine}.</span>}
-          {eligibleFlows.map((f) => (
-            <label key={f.id} className={styles.flow}>
-              <input
-                type="checkbox"
-                checked={selectedFlows.includes(f.name)}
-                onChange={() => toggleFlow(f.name)}
+        {triggerType === 'cron' ? (
+          <div className="space-y-2">
+            <Label htmlFor="sched-schedule">Schedule</Label>
+            <Select value={preset} onValueChange={setPreset}>
+              <SelectTrigger id="sched-schedule" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CRON_PRESETS.map((p) => (
+                  <SelectItem key={p.expr} value={p.expr}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+                <SelectItem value="custom">Custom…</SelectItem>
+              </SelectContent>
+            </Select>
+            {preset === 'custom' && (
+              <Input
+                type="text"
+                placeholder="minute hour day-of-month month day-of-week"
+                value={customCron}
+                onChange={(e) => setCustomCron(e.target.value)}
               />
-              {f.name}
-            </label>
-          ))}
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <Label htmlFor="sched-branch">Watch branch (on the project's source repo)</Label>
+            <Input
+              id="sched-branch"
+              type="text"
+              value={watchBranch}
+              onChange={(e) => setWatchBranch(e.target.value)}
+            />
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <Label htmlFor="sched-env">Environment</Label>
+          <Select value={environmentId} onValueChange={setEnvironmentId}>
+            <SelectTrigger id="sched-env" className="w-full">
+              <SelectValue placeholder="No environments" />
+            </SelectTrigger>
+            <SelectContent>
+              {envs.map((e) => (
+                <SelectItem key={e.id} value={e.id}>
+                  {e.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="sched-engine">Engine</Label>
+          <Select
+            value={engine}
+            onValueChange={(v) => setEngine(v as 'playwright' | 'k6')}
+          >
+            <SelectTrigger id="sched-engine" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="playwright">playwright (E2E)</SelectItem>
+              <SelectItem value="k6">k6 (load)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Flows (none selected = all eligible)</Label>
+          <div className="flex flex-wrap gap-2">
+            {eligibleFlows.length === 0 && (
+              <span className="text-muted-foreground text-sm">No flows support {engine}.</span>
+            )}
+            {eligibleFlows.map((f) => (
+              <Button
+                key={f.id}
+                type="button"
+                size="sm"
+                variant={selectedFlows.includes(f.name) ? 'default' : 'outline'}
+                onClick={() => toggleFlow(f.name)}
+              >
+                {f.name}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        {engine === 'k6' && (
+          <div className="space-y-2">
+            <Label htmlFor="sched-profile">Profile</Label>
+            <Select value={profile} onValueChange={(v) => setProfile(v as typeof profile)}>
+              <SelectTrigger id="sched-profile" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="smoke">smoke</SelectItem>
+                <SelectItem value="load">load</SelectItem>
+                <SelectItem value="stress">stress</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </div>
 
-      {engine === 'k6' && (
-        <label className={styles.field}>
-          <span>Profile</span>
-          <select value={profile} onChange={(e) => setProfile(e.target.value as typeof profile)}>
-            <option value="smoke">smoke</option>
-            <option value="load">load</option>
-            <option value="stress">stress</option>
-          </select>
-        </label>
-      )}
-
-      <div className={styles.actions}>
-        <button
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
           type="button"
-          className="btn btn-primary"
           disabled={busy || !environmentId || eligibleFlows.length === 0}
           onClick={submit}
         >
           Create schedule
-        </button>
-        <button type="button" className="btn" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </div>
+        </Button>
+      </DialogFooter>
+    </>
   )
 }
