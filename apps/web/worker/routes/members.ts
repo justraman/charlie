@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { ROLE_RANK, ROLES, type Role } from '../../shared/roles'
 import { createDb, type Db } from '../db/client'
-import { sessions, users } from '../db/schema'
+import { users } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { clientIp, HttpError, userAgent } from '../lib/http'
@@ -141,9 +141,9 @@ members.delete('/:id', async (c) => {
   await writeAudited(
     db,
     [
-      // Deactivate and invalidate their sessions in the same transaction.
+      // Mark deleted_at; the authenticate middleware rejects the user on their
+      // next request (JWT sessions carry no server-side row to delete).
       db.update(users).set({ deleted_at: now, updated_at: now }).where(eq(users.id, targetId)),
-      db.delete(sessions).where(eq(sessions.user_id, targetId)),
     ],
     {
       orgId: actor.orgId,

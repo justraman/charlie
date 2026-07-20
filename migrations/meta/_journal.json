@@ -8,6 +8,13 @@
       "when": 1784216605742,
       "tag": "0000_solid_obadiah_stane",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1784569274776,
+      "tag": "0001_authjs",
+      "breakpoints": true
     }
   ]
 }

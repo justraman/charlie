@@ -65,12 +65,17 @@ crons = ["* * * * *"]
 [observability]
 enabled = true
 
-# Non-secret vars. Secrets (GOOGLE_CLIENT_SECRET, CHARLIE_KEK, ...) come from
-# .dev.vars locally and `wrangler secret put` in production.
+# Non-secret vars. Secrets (AUTH_SECRET, GOOGLE_CLIENT_SECRET, AUTH_RESEND_KEY,
+# CHARLIE_KEK, ...) come from .dev.vars locally and `wrangler secret put` in
+# production. AUTH_SECRET is REQUIRED (signs the Auth.js session JWT).
 [vars]
 APP_BASE_URL = "http://localhost:8787"
+# Auth.js base URL. With trustHost enabled it's optional, but set it in prod to
+# match your deployed origin (e.g. "https://charlie.example.com/api/auth").
+AUTH_URL = "http://localhost:8787/api/auth"
 COOKIE_SECURE = ""
 ORG_NAME = "Charlie"
-# Comma-separated Google SSO allow-list. The org row is created from this on
-# first login; afterwards it is edited in the DB / admin UI.
+# Comma-separated SSO allow-list (applies to every provider: Google, magic-link,
+# ...). The org row is created from this on first login; afterwards it is edited
+# in the DB / admin UI.
 ALLOWED_EMAIL_DOMAINS = ""

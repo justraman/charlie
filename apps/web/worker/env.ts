@@ -28,14 +28,23 @@ export interface Env {
   // Slack Web API base URL. Defaults to https://slack.com/api; overridden only
   // in local/dev to point at a mock. Never set in production.
   SLACK_API_BASE?: string
-  // Local-dev only: when set, enables GET /api/auth/dev, which mints a session
-  // for this email with no external IdP (no Google client needed). Lives only
-  // in .dev.vars — never `wrangler secret put` it. The route hard-refuses when
-  // COOKIE_SECURE is "true" as a second guard against production exposure.
+  // Local-dev only: when set, registers a "dev" Auth.js Credentials provider
+  // that signs in as this email with no external IdP (no Google client needed).
+  // Lives only in .dev.vars — never `wrangler secret put` it. The provider is
+  // registered only when COOKIE_SECURE !== "true" (i.e. not a real deployment).
   DEV_LOGIN_EMAIL?: string
   // Local-dev only: role applied to the DEV_LOGIN_EMAIL user on every dev login.
   // Defaults to "owner" (full access); set to viewer|editor|admin to test RBAC.
   DEV_LOGIN_ROLE?: string
+
+  // Auth.js. AUTH_SECRET signs/encrypts the session JWT (required). AUTH_URL is
+  // the auth base (APP_BASE_URL + "/api/auth"); with trustHost it's optional but
+  // recommended in prod. Magic-link email goes through Resend — absent locally,
+  // where the verification link is logged to the console instead of sent.
+  AUTH_SECRET?: string
+  AUTH_URL?: string
+  AUTH_RESEND_KEY?: string
+  AUTH_EMAIL_FROM?: string // e.g. "Charlie <no-reply@yourdomain.com>"
 
   // Secrets (.dev.vars locally / `wrangler secret put` in prod)
   GOOGLE_CLIENT_ID?: string

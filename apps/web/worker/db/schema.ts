@@ -12,7 +12,15 @@
 //    migration rather than a schema rewrite.
 
 import { sql } from 'drizzle-orm'
-import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import {
+  check,
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core'
 
 // --- 0001_init ---------------------------------------------------------------
 
@@ -34,10 +42,13 @@ export const users = sqliteTable(
       .notNull()
       .references(() => organization.id),
     email: text('email').notNull(),
+    // Auth.js `emailVerified` (ms epoch). Set when a magic-link is used; may be
+    // null for OAuth users whose provider we trust for verification instead.
+    email_verified: integer('email_verified', { mode: 'timestamp_ms' }),
     name: text('name'),
+    // Maps to Auth.js `image` (the adapter aliases the two).
     avatar_url: text('avatar_url'),
     role: text('role').notNull(),
-    google_sub: text('google_sub').notNull(),
     last_login_at: text('last_login_at'),
     deleted_at: text('deleted_at'),
     created_at: text('created_at').notNull(),
@@ -45,25 +56,47 @@ export const users = sqliteTable(
   },
   (t) => [
     uniqueIndex('idx_users_email').on(t.email),
-    uniqueIndex('idx_users_google_sub').on(t.google_sub),
     index('idx_users_org').on(t.org_id),
     check('users_role_check', sql`${t.role} in ('owner', 'admin', 'editor', 'viewer')`),
   ],
 )
 
-export const sessions = sqliteTable(
-  'sessions',
+// Auth.js OAuth/OIDC account links (one row per provider identity). Replaces
+// the former `users.google_sub` column — identity is keyed by
+// (provider, provider_account_id) here so a user can link multiple providers.
+export const accounts = sqliteTable(
+  'accounts',
   {
-    id: text('id').primaryKey(), // SHA-256 of the cookie token; raw token never stored
+    id: text('id').primaryKey(),
     user_id: text('user_id')
       .notNull()
-      .references(() => users.id),
-    user_agent: text('user_agent'),
-    ip: text('ip'),
-    expires_at: text('expires_at').notNull(),
-    created_at: text('created_at').notNull(),
+      .references(() => users.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(), // 'oauth' | 'oidc' | 'email' | 'webauthn'
+    provider: text('provider').notNull(),
+    provider_account_id: text('provider_account_id').notNull(),
+    refresh_token: text('refresh_token'),
+    access_token: text('access_token'),
+    expires_at: integer('expires_at'), // seconds epoch (provider-supplied)
+    token_type: text('token_type'),
+    scope: text('scope'),
+    id_token: text('id_token'),
+    session_state: text('session_state'),
   },
-  (t) => [index('idx_sessions_user').on(t.user_id), index('idx_sessions_expires').on(t.expires_at)],
+  (t) => [
+    uniqueIndex('idx_accounts_provider').on(t.provider, t.provider_account_id),
+    index('idx_accounts_user').on(t.user_id),
+  ],
+)
+
+// Auth.js email magic-link verification tokens. Consumed once on callback.
+export const verification_token = sqliteTable(
+  'verification_token',
+  {
+    identifier: text('identifier').notNull(),
+    token: text('token').notNull(),
+    expires: integer('expires', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.identifier, t.token] })],
 )
 
 // --- 0002_auth ---------------------------------------------------------------
@@ -467,7 +500,8 @@ export const flow_drafts = sqliteTable(
 export const schema = {
   organization,
   users,
-  sessions,
+  accounts,
+  verification_token,
   api_keys,
   audit_log,
   projects,

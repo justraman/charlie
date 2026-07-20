@@ -1,36 +1,59 @@
 // The single protected-route middleware chain: authenticate → authorize →
 // rate-limit. Every /api route that isn't explicitly public composes these.
 
+import { getAuthUser } from '@hono/auth-js'
 import { eq } from 'drizzle-orm'
-import { getCookie } from 'hono/cookie'
 import { createMiddleware } from 'hono/factory'
-import type { Capability } from '../../shared/roles'
+import type { Capability, Role } from '../../shared/roles'
 import { roleHasCapability } from '../../shared/roles'
 import { createDb } from '../db/client'
-import { api_keys } from '../db/schema'
+import { api_keys, users } from '../db/schema'
 import type { AppBindings } from '../env'
 import { bearerToken, parseApiKey } from '../lib/apikeys'
 import { constantTimeEqual, sha256Hex } from '../lib/crypto'
 import { clientIp, HttpError } from '../lib/http'
 import { rateLimit } from '../lib/ratelimit'
-import { resolveSession, SESSION_COOKIE } from '../lib/session'
 
 /**
- * Authenticate the caller from a session cookie (humans) or a Bearer API key
- * (machines) and stash the resolved actor on the context. 401 if neither
+ * Authenticate the caller from an Auth.js JWT session (humans) or a Bearer API
+ * key (machines) and stash the resolved actor on the context. 401 if neither
  * credential is present or valid.
  */
 export const authenticate = createMiddleware<AppBindings>(async (c, next) => {
   const db = createDb(c.env.DB)
-  const cookieToken = getCookie(c, SESSION_COOKIE)
-  if (cookieToken) {
-    const user = await resolveSession(db, cookieToken)
-    if (user) {
+
+  // Humans: Auth.js session (JWT). getAuthUser returns null when unauthenticated
+  // (unlike verifyAuth, which throws), so the Bearer-key fallback below still runs.
+  const authUser = await getAuthUser(c)
+  const uid = typeof authUser?.token?.uid === 'string' ? authUser.token.uid : null
+  if (uid) {
+    // The JWT carries org/role, but we still hit the DB by PK to honor
+    // deactivation (deleted_at) — the revocation the stateless JWT can't give us.
+    const row = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        avatar_url: users.avatar_url,
+        role: users.role,
+        org_id: users.org_id,
+        deleted_at: users.deleted_at,
+      })
+      .from(users)
+      .where(eq(users.id, uid))
+      .get()
+    if (row && !row.deleted_at) {
       c.set('auth', {
         actorKind: 'user',
-        actorId: user.id,
-        orgId: user.orgId,
-        user,
+        actorId: row.id,
+        orgId: row.org_id,
+        user: {
+          id: row.id,
+          email: row.email,
+          name: row.name,
+          avatarUrl: row.avatar_url,
+          role: row.role as Role,
+        },
       })
       return next()
     }

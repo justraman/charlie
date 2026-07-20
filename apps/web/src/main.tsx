@@ -1,3 +1,4 @@
+import { SessionProvider } from '@hono/auth-js/react'
 import { ThemeProvider } from 'next-themes'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -12,12 +13,14 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
       <BrowserRouter>
-        <AuthProvider>
-          <TooltipProvider delayDuration={200}>
-            <App />
-            <Toaster richColors position="top-right" />
-          </TooltipProvider>
-        </AuthProvider>
+        <SessionProvider>
+          <AuthProvider>
+            <TooltipProvider delayDuration={200}>
+              <App />
+              <Toaster richColors position="top-right" />
+            </TooltipProvider>
+          </AuthProvider>
+        </SessionProvider>
       </BrowserRouter>
     </ThemeProvider>
   </StrictMode>,

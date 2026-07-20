@@ -69,7 +69,13 @@ async function importKek(kekBase64: string): Promise<CryptoKey> {
   if (raw.length !== 32) {
     throw new Error('CHARLIE_KEK must decode to exactly 32 bytes (256-bit AES key)')
   }
-  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+  // `as BufferSource`: @auth/core pulls the DOM lib into the program, whose
+  // TS-5.7 BufferSource is narrower than a Uint8Array<ArrayBufferLike>. The cast
+  // is type-only — the Workers runtime accepts the Uint8Array as-is.
+  return crypto.subtle.importKey('raw', raw as BufferSource, { name: 'AES-GCM' }, false, [
+    'encrypt',
+    'decrypt',
+  ])
 }
 
 export async function encryptString(plaintext: string, kekBase64: string): Promise<string> {
@@ -87,8 +93,8 @@ export async function encryptString(plaintext: string, kekBase64: string): Promi
 export async function decryptString(ciphertext: string, kekBase64: string): Promise<string> {
   const key = await importKek(kekBase64)
   const bytes = fromBase64Url(ciphertext)
-  const iv = bytes.subarray(0, 12)
-  const ct = bytes.subarray(12)
+  const iv = bytes.subarray(0, 12) as BufferSource
+  const ct = bytes.subarray(12) as BufferSource
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct)
   return decoder.decode(pt)
 }

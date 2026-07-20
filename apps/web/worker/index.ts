@@ -1,12 +1,13 @@
+import { authHandler, initAuthConfig } from '@hono/auth-js'
 import { Hono } from 'hono'
 import { dispatchRun } from './consumer'
 import type { AppBindings, Env, RunQueueMessage } from './env'
+import { buildAuthConfig } from './lib/authjs'
 import { errorResponse, HttpError } from './lib/http'
 import { uuidv7 } from './lib/ids'
 import aiRoutes from './routes/ai'
 import aiProviderRoutes from './routes/ai-providers'
 import apiKeyRoutes from './routes/apikeys'
-import authRoutes from './routes/auth'
 import callbackRoutes from './routes/callbacks'
 import environmentRoutes from './routes/environments'
 import flowDraftRoutes from './routes/flow-drafts'
@@ -38,8 +39,14 @@ app.onError((err, c) => {
 
 // --- API surface ------------------------------------------------------------
 const api = new Hono<AppBindings>()
+
+// Make the Auth.js config available on every /api request (the authenticate
+// middleware reads the session via getAuthUser), then let Auth.js own the whole
+// /api/auth/* surface: signin, signout, session, csrf, callback/:provider.
+api.use('*', initAuthConfig(buildAuthConfig))
+api.use('/auth/*', authHandler())
+
 api.route('/health', healthRoutes)
-api.route('/auth', authRoutes)
 api.route('/members', memberRoutes)
 api.route('/api-keys', apiKeyRoutes)
 api.route('/projects', projectRoutes)
