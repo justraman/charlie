@@ -38,11 +38,54 @@ Keep the **Client ID** and **Client secret** for step 4. See [AUTH.md](AUTH.md) 
 
 ## 3. GitHub App
 
-Create one GitHub App (not a personal token) and install it on both the runner repo and any source repos you want to watch. See [CI_INTEGRATION.md](CI_INTEGRATION.md) for how it's used.
+Create **one** GitHub App (not a personal token) and install it on both the runner repo and any source repos you want to watch. The App does three jobs: dispatches the reusable workflow, receives `push`/`pull_request` webhooks for on-merge triggers, and reads source (read-only) for AI flow generation. See [CI_INTEGRATION.md](CI_INTEGRATION.md) for how it's used.
 
-- **Permissions:** `actions: write` (dispatch + cancel), `contents: read` (checkout + AI source read), `metadata: read`.
-- **Webhook:** URL `https://<your-domain>/webhooks/github`, events `push` and `pull_request`, with a webhook secret you choose.
-- Note the **App ID**, generate a **private key** (PKCS#8 PEM), and record the **installation ID** for your account/org.
+### 3.1 Register the App
+
+Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App** (or your **org → Settings → Developer settings → GitHub Apps** if the runner repo lives in an org), and fill in:
+
+| Field | Value |
+| --- | --- |
+| **GitHub App name** | globally unique, e.g. `charlie-<yourco>` |
+| **Homepage URL** | `https://<your-domain>` |
+| **Webhook → Active** | checked |
+| **Webhook URL** | `https://<your-domain>/webhooks/github` |
+| **Webhook secret** | generate one (`openssl rand -hex 32`) and save it |
+
+If you haven't deployed yet and have no domain, use a placeholder URL and edit it after deploy — the webhook is only needed for on-merge triggers.
+
+### 3.2 Permissions & events
+
+Under **Repository permissions** set exactly (least privilege):
+
+- **Actions:** Read and write — dispatch + cancel workflow runs
+- **Contents:** Read-only — checkout runner code + AI source read
+- **Metadata:** Read-only — mandatory, auto-selected
+
+Under **Subscribe to events** check **Push** and **Pull request**.
+
+### 3.3 Collect credentials & install
+
+1. **App ID** — shown at the top of the App page → `GITHUB_APP_ID`.
+2. **Generate a private key** (bottom of the page) → downloads a `.pem` → `GITHUB_APP_PRIVATE_KEY` (but convert it first, see 3.4).
+3. **Install App** (left sidebar) on your **runner repo** (for v1 that's the Charlie repo itself, which ships `charlie-run.yml`) and any **source repos** you want on-merge triggers / AI generation for.
+4. After installing, the browser URL is `.../installations/<number>` — that number is `GITHUB_INSTALLATION_ID`.
+
+### 3.4 Convert the private key to PKCS#8
+
+GitHub issues a **PKCS#1** key (`-----BEGIN RSA PRIVATE KEY-----`), but the Worker imports it with `jose`'s `importPKCS8()` (`worker/lib/github.ts`), which requires **PKCS#8** (`-----BEGIN PRIVATE KEY-----`). Convert before setting the secret:
+
+```bash
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+  -in your-app.<date>.private-key.pem \
+  -out charlie-gh-key-pkcs8.pem
+```
+
+Use the `charlie-gh-key-pkcs8.pem` output as `GITHUB_APP_PRIVATE_KEY` in step 4.
+
+### 3.5 Verify (after deploy)
+
+`GET https://<your-domain>/api/integrations` returns `github: { configured, connected, detail }`. `connected: true` means the App id, key, and installation successfully minted an installation token; `detail` shows the runner repo. If `connected: false`, `detail` carries the truncated GitHub error — the usual cause is a key still in PKCS#1 (redo 3.4) or a wrong installation ID.
 
 ## 4. Set Worker secrets
 

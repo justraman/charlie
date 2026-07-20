@@ -34,7 +34,6 @@ COOKIE_SECURE=""
 # Generate: `openssl rand -base64 32`. Falls back to CHARLIE_KEK if unset.
 CHARLIE_RUN_TOKEN_SECRET=""
 
-# --- GitHub App (Phase 3) — dispatch to the runner repo ---
 # Absent locally → workflow dispatch is skipped (simulate the runner instead).
 # GITHUB_APP_ID=""
 # GITHUB_APP_PRIVATE_KEY=""          # PKCS#8 PEM (keep newlines)
@@ -44,8 +43,6 @@ CHARLIE_RUN_TOKEN_SECRET=""
 # GITHUB_RUNNER_REF="main"
 # RUNNER_WORKFLOW_FILE="charlie-run.yml"
 
-# --- R2 S3 credentials (Phase 3) — presigned artifact uploads ---
-# Absent → the Worker proxies artifact uploads to the R2 binding (fine locally).
 # R2_ACCOUNT_ID=""
 # R2_ACCESS_KEY_ID=""
 # R2_SECRET_ACCESS_KEY=""

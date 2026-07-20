@@ -25,13 +25,13 @@ run_worker_first = ["/api/*", "/webhooks/*", "/slack/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "charlie-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "bca4eabb-7756-4a27-a1ab-836eed970e3f"
 migrations_dir = "../../migrations"
 
 # Short-lived state: OAuth PKCE/state, rate-limit counters, Slack nonces.
 [[kv_namespaces]]
 binding = "KV"
-id = "charlie_kv_local_placeholder"
+id = "b39eba9a80104e49aa96f3f6e1ab7068"
 
 # Large artifacts: screenshots, videos, Playwright traces, k6 summaries, HTML reports.
 [[r2_buckets]]
