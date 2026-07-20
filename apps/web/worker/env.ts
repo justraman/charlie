@@ -28,6 +28,20 @@ export interface Env {
   // Slack Web API base URL. Defaults to https://slack.com/api; overridden only
   // in local/dev to point at a mock. Never set in production.
   SLACK_API_BASE?: string
+
+  // Slack integration credentials (secrets). Absent → Slack is "not configured"
+  // (slash commands 401, run reports skipped). SLACK_TEAM_ID is optional and, when
+  // set, tightens inbound matching to that workspace.
+  SLACK_BOT_TOKEN?: string
+  SLACK_SIGNING_SECRET?: string
+  SLACK_TEAM_ID?: string
+
+  // AI provider (single, secrets). Absent → AI analysis is "not configured".
+  // AI_PROVIDER selects the kind; AI_ACCOUNT_ID is only used by workers_ai.
+  AI_PROVIDER?: string // 'anthropic' | 'openai' | 'workers_ai'
+  AI_MODEL?: string
+  AI_API_KEY?: string
+  AI_ACCOUNT_ID?: string
   // Local-dev only: when set, registers a "dev" Auth.js Credentials provider
   // that signs in as this email with no external IdP (no Google client needed).
   // Lives only in .dev.vars — never `wrangler secret put` it. The provider is

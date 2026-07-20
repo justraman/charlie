@@ -10,7 +10,7 @@ import { createDb } from '../db/client'
 import { environments, projects, reports, run_shards, runs, shard_results } from '../db/schema'
 import type { Env } from '../env'
 import { uuidv7 } from '../lib/ids'
-import { getIntegrationConfig } from '../lib/integrations'
+import { slackCredentials } from '../lib/integrations'
 import type {
   FlowResultEntry,
   RunInit,
@@ -423,8 +423,8 @@ export class RunCoordinator extends DurableObject<Env> {
     const channel = run.slack_channel ?? run.project_channel
     if (!channel) return // nothing subscribed to this run
 
-    const config = await getIntegrationConfig(this.env, meta.orgId, 'slack')
-    if (!config?.botToken) return // Slack not connected
+    const creds = slackCredentials(this.env)
+    if (!creds) return // Slack not configured (env)
 
     let summary: Record<string, unknown> = {}
     try {
@@ -465,7 +465,7 @@ export class RunCoordinator extends DurableObject<Env> {
     })
     const icon = status === 'passed' ? '✅' : '❌'
     await postMessage(
-      config.botToken,
+      creds.botToken,
       channel,
       blocks,
       `${icon} ${run.project_name} · ${run.env_name} — ${status}`,

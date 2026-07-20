@@ -6,7 +6,6 @@ import { buildAuthConfig } from './lib/authjs'
 import { errorResponse, HttpError } from './lib/http'
 import { uuidv7 } from './lib/ids'
 import aiRoutes from './routes/ai'
-import aiProviderRoutes from './routes/ai-providers'
 import apiKeyRoutes from './routes/apikeys'
 import callbackRoutes from './routes/callbacks'
 import environmentRoutes from './routes/environments'
@@ -53,7 +52,6 @@ api.route('/projects', projectRoutes)
 api.route('/runs', runRoutes)
 api.route('/schedules', scheduleRoutes)
 api.route('/integrations', integrationRoutes)
-api.route('/ai-providers', aiProviderRoutes)
 // environments, flows, drafts, ai, and machine callbacks register full subpaths,
 // so they mount at the API root.
 api.route('/', environmentRoutes)

@@ -21,6 +21,21 @@ export function githubConfigured(env: Env): boolean {
   )
 }
 
+/** Live connectivity check: mint an installation token to prove the App id, key,
+ *  and installation are valid. Returns the runner repo as the detail line. */
+export async function githubCheck(
+  env: Env,
+  deps: GithubDeps = {},
+): Promise<{ ok: boolean; detail: string | null }> {
+  if (!githubConfigured(env)) return { ok: false, detail: 'not configured' }
+  try {
+    await getInstallationToken(env, deps)
+    return { ok: true, detail: env.GITHUB_RUNNER_REPO ?? null }
+  } catch (err) {
+    return { ok: false, detail: (err as Error).message.slice(0, 160) }
+  }
+}
+
 /** A ~10-minute App JWT (RS256), used only to mint installation tokens. */
 export async function createAppJwt(
   appId: string,

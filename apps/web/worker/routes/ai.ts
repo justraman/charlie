@@ -10,16 +10,15 @@ import { Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import { z } from 'zod'
 import { createDb } from '../db/client'
-import { ai_analyses, ai_providers, flow_drafts, organization, projects } from '../db/schema'
+import { ai_analyses, flow_drafts, projects } from '../db/schema'
 import type { AppBindings } from '../env'
+import { resolveAiProvider } from '../lib/ai'
 import { bearerToken } from '../lib/apikeys'
 import { writeAudited } from '../lib/audit'
-import { decryptString } from '../lib/crypto'
 import { dispatchWorkflow, githubConfigured, resolveRunId } from '../lib/github'
 import { clientIp, HttpError, userAgent } from '../lib/http'
 import { uuidv7 } from '../lib/ids'
 import { runTokenSecret, signAnalysisToken, verifyAnalysisToken } from '../lib/run-token'
-import { parseBody } from '../lib/validate'
 import { authenticate, authorize } from '../middleware/auth'
 
 const ai = new Hono<AppBindings>()
@@ -46,7 +45,6 @@ function analysisTokenAuth() {
 // --- POST /api/projects/:id/analyze (editor) — trigger an analysis ----------
 const analyzeSchema = z.object({
   ref: z.string().max(200).optional(),
-  providerId: z.string().optional(),
 })
 
 ai.post(
@@ -75,23 +73,9 @@ ai.post(
       throw new HttpError('bad_request', 'Project has no source_repo to analyze')
     }
 
-    // Provider: explicit, else the org default.
-    let providerId = body.providerId
-    if (!providerId) {
-      const org = await db
-        .select({ default_ai_provider_id: organization.default_ai_provider_id })
-        .from(organization)
-        .where(eq(organization.id, actor.orgId))
-        .get()
-      providerId = org?.default_ai_provider_id ?? undefined
-    }
-    if (!providerId) throw new HttpError('bad_request', 'No AI provider configured')
-    const provider = await db
-      .select({ id: ai_providers.id })
-      .from(ai_providers)
-      .where(and(eq(ai_providers.id, providerId), eq(ai_providers.org_id, actor.orgId)))
-      .get()
-    if (!provider) throw new HttpError('bad_request', 'Unknown AI provider')
+    // The single AI provider comes from env (Cloudflare secrets), not the DB.
+    const provider = resolveAiProvider(c.env)
+    if (!provider) throw new HttpError('bad_request', 'No AI provider configured')
 
     const analysisId = uuidv7()
     const now = new Date().toISOString()
@@ -103,7 +87,7 @@ ai.post(
           id: analysisId,
           org_id: actor.orgId,
           project_id: projectId,
-          provider_id: providerId,
+          provider_name: provider.name,
           ref: body.ref ?? null,
           status: 'queued',
           created_by: actor.actorId,
@@ -117,7 +101,7 @@ ai.post(
         action: 'ai.analyze',
         entityType: 'ai_analysis',
         entityId: analysisId,
-        after: { projectId, providerId, ref: body.ref ?? null },
+        after: { projectId, provider: provider.name, ref: body.ref ?? null },
         ip: clientIp(c),
         userAgent: userAgent(c),
       },
@@ -176,29 +160,17 @@ ai.get('/analyses/:id/config', analysisTokenAuth(), async (c) => {
     .select({
       ref: ai_analyses.ref,
       source_repo: projects.source_repo,
-      provider_name: ai_providers.name,
-      model: ai_providers.model,
-      api_key_ciphertext: ai_providers.api_key_ciphertext,
     })
     .from(ai_analyses)
     .innerJoin(projects, eq(projects.id, ai_analyses.project_id))
-    .leftJoin(ai_providers, eq(ai_providers.id, ai_analyses.provider_id))
     .where(eq(ai_analyses.id, analysisId))
     .get()
   if (!row) throw new HttpError('not_found', 'Analysis not found')
 
-  // Credentials cross into the compute plane here (like a run bundle's secrets).
-  let apiKey: string | null = null
-  let accountId: string | null = null
-  if (row.api_key_ciphertext) {
-    try {
-      const creds = JSON.parse(await decryptString(row.api_key_ciphertext, c.env.CHARLIE_KEK ?? ''))
-      apiKey = creds.apiKey ?? null
-      accountId = creds.accountId ?? null
-    } catch {
-      /* leave null */
-    }
-  }
+  // Credentials cross into the compute plane here (like a run bundle's secrets),
+  // sourced from env (Cloudflare secrets) — never persisted to the DB.
+  const provider = resolveAiProvider(c.env)
+  if (!provider) throw new HttpError('bad_request', 'No AI provider configured')
 
   // Mark running on first pickup.
   await db
@@ -210,7 +182,12 @@ ai.get('/analyses/:id/config', analysisTokenAuth(), async (c) => {
     analysisId,
     repo: row.source_repo,
     ref: row.ref,
-    provider: { name: row.provider_name, model: row.model, apiKey, accountId },
+    provider: {
+      name: provider.name,
+      model: provider.model,
+      apiKey: provider.apiKey,
+      accountId: provider.accountId,
+    },
   })
 })
 

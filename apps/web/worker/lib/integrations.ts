@@ -1,141 +1,105 @@
-// Connected-app credential storage. Config (tokens, signing secrets) is stored
-// as AES-GCM ciphertext of a JSON blob, encrypted with CHARLIE_KEK — the same
-// at-rest scheme as environment secrets, and likewise never returned to a
-// client (routes expose only presence + non-secret hints).
+// Integration configuration is sourced from env (Cloudflare secrets), never the
+// DB. This module exposes the Slack credential helpers and the consolidated
+// live-status used by the Integrations page. Each "connected" flag comes from a
+// real connectivity check (Slack auth.test, GitHub token mint, AI models ping),
+// cached briefly in KV so the page stays responsive and we don't hammer APIs.
 
-import { and, eq, sql } from 'drizzle-orm'
-import { createDb, type Db } from '../db/client'
-import { integrations } from '../db/schema'
 import type { Env } from '../env'
-import type { Mutation } from './audit'
-import { decryptString, encryptString } from './crypto'
-import { uuidv7 } from './ids'
+import { aiCheck, aiConfigured, resolveAiProvider } from './ai'
+import { githubCheck, githubConfigured } from './github'
+import { slackAuthTest } from './slack'
 
-export type IntegrationKind = 'slack' | 'github'
-
-export interface SlackConfig {
-  teamId?: string
+export interface SlackCredentials {
   botToken: string
   signingSecret: string
+  teamId: string | null
 }
 
-/** Load and decrypt an integration's config, or null if not connected. */
-export async function getIntegrationConfig<T = SlackConfig>(
-  env: Env,
-  orgId: string,
-  kind: IntegrationKind,
-): Promise<T | null> {
-  const db = createDb(env.DB)
-  const row = await db
-    .select({ config_ciphertext: integrations.config_ciphertext })
-    .from(integrations)
-    .where(and(eq(integrations.org_id, orgId), eq(integrations.kind, kind)))
-    .get()
-  if (!row) return null
-  const json = await decryptString(row.config_ciphertext, env.CHARLIE_KEK ?? '')
-  return JSON.parse(json) as T
+/** Whether Slack is configured via env (bot token + signing secret present). */
+export function slackConfigured(env: Env): boolean {
+  return Boolean(env.SLACK_BOT_TOKEN && env.SLACK_SIGNING_SECRET)
 }
 
-/**
- * Resolve the Slack integration for an inbound request. Single-org self-host has
- * one Slack integration, so we match by team id when we have one and otherwise
- * fall back to the sole connected integration. Returns the org id + decrypted
- * config (the signing secret is what authenticates the request).
- */
-export async function resolveSlackIntegration(
-  env: Env,
-  teamId: string | null,
-): Promise<{ orgId: string; config: SlackConfig } | null> {
-  const db = createDb(env.DB)
-  const row = await db
-    .select({
-      org_id: integrations.org_id,
-      config_ciphertext: integrations.config_ciphertext,
-    })
-    .from(integrations)
-    // Prefer an exact team-id match, but a single-org self-host may have stored
-    // the integration with no external_id, and inbound requests may lack one.
-    .where(
-      sql`${integrations.kind} = 'slack' and (${integrations.external_id} = ${teamId} or ${integrations.external_id} is null or ${teamId} is null)`,
-    )
-    .orderBy(sql`(${integrations.external_id} = ${teamId}) desc`)
-    .limit(1)
-    .get()
-  if (!row) return null
-  const config = JSON.parse(
-    await decryptString(row.config_ciphertext, env.CHARLIE_KEK ?? ''),
-  ) as SlackConfig
-  return { orgId: row.org_id, config }
-}
-
-/** Whether an integration of this kind is connected (no decryption). */
-export async function integrationStatus(
-  env: Env,
-  orgId: string,
-  kind: IntegrationKind,
-): Promise<{ connected: boolean; externalId: string | null; updatedAt: string | null }> {
-  const db = createDb(env.DB)
-  const row = await db
-    .select({ external_id: integrations.external_id, updated_at: integrations.updated_at })
-    .from(integrations)
-    .where(and(eq(integrations.org_id, orgId), eq(integrations.kind, kind)))
-    .get()
+/** Slack credentials from env, or null if not configured. */
+export function slackCredentials(env: Env): SlackCredentials | null {
+  if (!slackConfigured(env)) return null
   return {
-    connected: !!row,
-    externalId: row?.external_id ?? null,
-    updatedAt: row?.updated_at ?? null,
+    botToken: env.SLACK_BOT_TOKEN!,
+    signingSecret: env.SLACK_SIGNING_SECRET!,
+    teamId: env.SLACK_TEAM_ID ?? null,
   }
 }
 
-/** Encrypt an integration's config JSON with CHARLIE_KEK (async, so it runs
- *  before building the — necessarily synchronous — upsert statement). */
-export function encryptIntegrationConfig(env: Env, config: unknown): Promise<string> {
-  return encryptString(JSON.stringify(config), env.CHARLIE_KEK ?? '')
+export interface IntegrationStatus {
+  configured: boolean
+  connected: boolean
+  detail: string | null
 }
+export interface AiStatus extends IntegrationStatus {
+  provider: string | null
+  model: string | null
+}
+export interface IntegrationsStatus {
+  slack: IntegrationStatus
+  github: IntegrationStatus
+  ai: AiStatus
+  checkedAt: string
+}
+
+const STATUS_KV_KEY = 'intstatus:v1'
+const STATUS_TTL_SEC = 60
 
 /**
- * Upsert an integration's encrypted config (one per org+kind). Returns an
- * unexecuted Drizzle statement so the caller can commit it in one batch with an
- * audit row. Synchronous by contract: a Drizzle builder is a thenable, so
- * returning one from an `async` function would execute it immediately — hence
- * the ciphertext is computed by the caller via `encryptIntegrationConfig`.
+ * Consolidated live status for the Integrations page. Cached in KV for
+ * STATUS_TTL_SEC; `refresh` bypasses the cache and rewrites it. Live checks run
+ * in parallel and are skipped (connected:false) when the integration is not
+ * configured.
  */
-export function upsertIntegrationStatement(
-  db: Db,
-  params: {
-    orgId: string
-    kind: IntegrationKind
-    externalId: string | null
-    configCiphertext: string
-    createdBy: string | null
-  },
-): Mutation {
-  const now = new Date().toISOString()
-  return db
-    .insert(integrations)
-    .values({
-      id: uuidv7(),
-      org_id: params.orgId,
-      kind: params.kind,
-      external_id: params.externalId,
-      config_ciphertext: params.configCiphertext,
-      created_by: params.createdBy,
-      created_at: now,
-      updated_at: now,
-    })
-    .onConflictDoUpdate({
-      target: [integrations.org_id, integrations.kind],
-      set: {
-        external_id: sql`excluded.external_id`,
-        config_ciphertext: sql`excluded.config_ciphertext`,
-        updated_at: sql`excluded.updated_at`,
-      },
-    })
-}
+export async function getIntegrationsStatus(
+  env: Env,
+  opts: { refresh?: boolean } = {},
+): Promise<IntegrationsStatus> {
+  if (!opts.refresh) {
+    const cached = await env.KV.get(STATUS_KV_KEY)
+    if (cached) {
+      try {
+        return JSON.parse(cached) as IntegrationsStatus
+      } catch {
+        // fall through and recompute
+      }
+    }
+  }
 
-/** Delete statement for disconnecting an integration. */
-export function deleteIntegrationStatement(db: Db, orgId: string, kind: IntegrationKind): Mutation {
-  return db
-    .delete(integrations)
-    .where(and(eq(integrations.org_id, orgId), eq(integrations.kind, kind)))
+  const provider = resolveAiProvider(env)
+  const [slackChk, githubChk, aiChk] = await Promise.all([
+    slackConfigured(env)
+      ? slackAuthTest(env.SLACK_BOT_TOKEN!, env.SLACK_API_BASE)
+      : Promise.resolve({ ok: false, detail: null as string | null }),
+    githubCheck(env),
+    aiCheck(env),
+  ])
+
+  const status: IntegrationsStatus = {
+    slack: {
+      configured: slackConfigured(env),
+      connected: slackChk.ok,
+      detail: slackChk.detail,
+    },
+    github: {
+      configured: githubConfigured(env),
+      connected: githubChk.ok,
+      detail: githubChk.detail,
+    },
+    ai: {
+      configured: aiConfigured(env),
+      connected: aiChk.ok,
+      detail: aiChk.detail,
+      provider: provider?.name ?? env.AI_PROVIDER ?? null,
+      model: provider?.model ?? env.AI_MODEL ?? null,
+    },
+    checkedAt: new Date().toISOString(),
+  }
+
+  await env.KV.put(STATUS_KV_KEY, JSON.stringify(status), { expirationTtl: STATUS_TTL_SEC })
+  return status
 }

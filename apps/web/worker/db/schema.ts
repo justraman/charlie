@@ -28,7 +28,6 @@ export const organization = sqliteTable('organization', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   allowed_email_domains: text('allowed_email_domains').notNull().default('[]'), // JSON array
-  default_ai_provider_id: text('default_ai_provider_id'), // reserved here; set via provider API
   settings: text('settings').notNull().default('{}'), // JSON
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
@@ -393,49 +392,10 @@ export const schedules = sqliteTable(
   ],
 )
 
-// --- 0006_integrations -------------------------------------------------------
-
-export const integrations = sqliteTable(
-  'integrations',
-  {
-    id: text('id').primaryKey(),
-    org_id: text('org_id')
-      .notNull()
-      .references(() => organization.id),
-    kind: text('kind').notNull(),
-    external_id: text('external_id'), // Slack team id / GitHub installation id
-    config_ciphertext: text('config_ciphertext').notNull(), // encrypted JSON of tokens/secrets
-    created_by: text('created_by').references(() => users.id),
-    created_at: text('created_at').notNull(),
-    updated_at: text('updated_at').notNull(),
-  },
-  (t) => [
-    uniqueIndex('idx_integrations_org_kind').on(t.org_id, t.kind), // one per kind per org
-    check('integrations_kind_check', sql`${t.kind} in ('slack', 'github')`),
-  ],
-)
-
 // --- 0007_ai -----------------------------------------------------------------
-
-export const ai_providers = sqliteTable(
-  'ai_providers',
-  {
-    id: text('id').primaryKey(),
-    org_id: text('org_id')
-      .notNull()
-      .references(() => organization.id),
-    name: text('name').notNull(),
-    model: text('model').notNull(),
-    api_key_ciphertext: text('api_key_ciphertext'), // encrypted; nullable for workers_ai
-    created_by: text('created_by').references(() => users.id),
-    created_at: text('created_at').notNull(),
-    updated_at: text('updated_at').notNull(),
-  },
-  (t) => [
-    index('idx_ai_providers_org').on(t.org_id),
-    check('ai_providers_name_check', sql`${t.name} in ('anthropic', 'openai', 'workers_ai')`),
-  ],
-)
+// Integration credentials (Slack, GitHub, AI provider) live in env/Cloudflare
+// secrets, NOT the DB — the former `integrations` and `ai_providers` tables were
+// dropped in migration 0002. `ai_analyses` only records which provider ran.
 
 export const ai_analyses = sqliteTable(
   'ai_analyses',
@@ -447,7 +407,7 @@ export const ai_analyses = sqliteTable(
     project_id: text('project_id')
       .notNull()
       .references(() => projects.id),
-    provider_id: text('provider_id').references(() => ai_providers.id),
+    provider_name: text('provider_name'), // which env-configured provider ran (record only)
     ref: text('ref'), // git ref analyzed (default branch if null)
     status: text('status').notNull(),
     error: text('error'),
@@ -513,8 +473,6 @@ export const schema = {
   shard_results,
   reports,
   schedules,
-  integrations,
-  ai_providers,
   ai_analyses,
   flow_drafts,
 }

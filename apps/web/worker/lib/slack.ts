@@ -221,6 +221,24 @@ export async function slackApi(
   return (await res.json()) as SlackApiResponse
 }
 
+/** Live connectivity check: auth.test confirms the bot token is valid and
+ *  returns the workspace it belongs to. */
+export async function slackAuthTest(
+  botToken: string,
+  apiBase?: string,
+): Promise<{ ok: boolean; team: string | null; detail: string | null }> {
+  try {
+    const res = await slackApi(botToken, 'auth.test', {}, apiBase)
+    if (res.ok) {
+      const team = typeof res.team === 'string' ? res.team : null
+      return { ok: true, team, detail: team }
+    }
+    return { ok: false, team: null, detail: res.error ?? 'auth.test failed' }
+  } catch (err) {
+    return { ok: false, team: null, detail: (err as Error).message }
+  }
+}
+
 /** Resolve a Slack user's email via users.info (needs users:read.email scope). */
 export async function usersInfoEmail(
   botToken: string,

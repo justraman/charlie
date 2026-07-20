@@ -15,6 +15,13 @@
       "when": 1784569274776,
       "tag": "0001_authjs",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784580274814,
+      "tag": "0002_integrations_to_env",
+      "breakpoints": true
     }
   ]
 }

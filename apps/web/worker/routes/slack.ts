@@ -12,7 +12,8 @@ import { projects, runs, users } from '../db/schema'
 import type { AppBindings, Env } from '../env'
 import { writeAudit } from '../lib/audit'
 import { HttpError } from '../lib/http'
-import { resolveSlackIntegration, type SlackConfig } from '../lib/integrations'
+import { slackCredentials } from '../lib/integrations'
+import { getOrganization } from '../lib/org'
 import { createRun } from '../lib/run-create'
 import {
   parseSlackCommand,
@@ -42,23 +43,23 @@ async function userByEmail(env: Env, orgId: string, email: string): Promise<Char
   return (row as CharlieUser | undefined) ?? null
 }
 
-// Verify the request and load the org + Slack config. Returns null (caller 401s)
-// on any failure. `teamId` from the body is only a lookup key; the signing
-// secret is what authenticates.
+// Verify the request against the env-configured Slack credentials, then resolve
+// the single org. Returns null (caller 401s) on any failure. The signing secret
+// authenticates; `teamId` is only used to optionally pin to one workspace when
+// SLACK_TEAM_ID is set.
 async function verified(
   env: Env,
   raw: string,
   headers: { ts?: string; sig?: string; teamId: string | null },
-): Promise<{ orgId: string; config: SlackConfig } | null> {
-  const integration = await resolveSlackIntegration(env, headers.teamId)
-  if (!integration) return null
-  const ok = await verifySlackSignature(
-    integration.config.signingSecret,
-    headers.ts,
-    raw,
-    headers.sig,
-  )
-  return ok ? integration : null
+): Promise<{ orgId: string; botToken: string } | null> {
+  const creds = slackCredentials(env)
+  if (!creds) return null
+  if (creds.teamId && headers.teamId && creds.teamId !== headers.teamId) return null
+  const ok = await verifySlackSignature(creds.signingSecret, headers.ts, raw, headers.sig)
+  if (!ok) return null
+  const org = await getOrganization(createDb(env.DB))
+  if (!org) return null
+  return { orgId: org.id, botToken: creds.botToken }
 }
 
 // --- POST /slack/command — slash command ------------------------------------
@@ -134,7 +135,7 @@ slack.post('/command', async (c) => {
 
 async function triggerFromSlack(
   env: Env,
-  integration: { orgId: string; config: SlackConfig },
+  integration: { orgId: string; botToken: string },
   ctx: {
     cmd: ReturnType<typeof parseSlackCommand>
     userId: string
@@ -143,7 +144,7 @@ async function triggerFromSlack(
   },
 ): Promise<void> {
   const { cmd, userId, channelId, responseUrl } = ctx
-  const { botToken } = integration.config
+  const { botToken } = integration
 
   const email = await usersInfoEmail(botToken, userId, env.SLACK_API_BASE)
   if (!email) {
@@ -244,11 +245,11 @@ slack.post('/interactivity', async (c) => {
 
 async function rerunFromSlack(
   env: Env,
-  integration: { orgId: string; config: SlackConfig },
+  integration: { orgId: string; botToken: string },
   ctx: { runId: string; userId: string; channelId: string; responseUrl: string },
 ): Promise<void> {
   const { runId, userId, channelId, responseUrl } = ctx
-  const email = await usersInfoEmail(integration.config.botToken, userId, env.SLACK_API_BASE)
+  const email = await usersInfoEmail(integration.botToken, userId, env.SLACK_API_BASE)
   const user = email ? await userByEmail(env, integration.orgId, email) : null
   if (!user || !roleHasCapability(user.role, 'runs.trigger')) {
     if (responseUrl) await respondUrl(responseUrl, "You don't have permission to re-run.")
