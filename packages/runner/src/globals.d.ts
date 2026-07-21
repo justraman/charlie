@@ -23,6 +23,21 @@ declare module 'node:fs' {
   export function statSync(path: string): { size: number }
 }
 
+// The Playwright engine writes the trace to a temp path, then reads it back to
+// upload. Only the async surface actually used is declared here.
+declare module 'node:fs/promises' {
+  export function readFile(path: string): Promise<Uint8Array>
+  export function unlink(path: string): Promise<void>
+}
+
+declare module 'node:os' {
+  export function tmpdir(): string
+}
+
+declare module 'node:path' {
+  export function join(...parts: string[]): string
+}
+
 declare namespace Bun {
   function spawnSync(
     cmd: string[],

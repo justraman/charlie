@@ -65,6 +65,17 @@ function buildProviders(env: Env): AuthConfig['providers'] {
           console.log(`[auth] magic-link for ${identifier}: ${url}`)
           return
         }
+        // HTML-escape the URL for use inside an href/attribute: unescaped `&`
+        // (from &token=/&email=) makes strict mail clients like Gmail drop the
+        // anchor, so the link renders as plain text with no clickable target.
+        const href = url.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+        const html = `<div style="font-family:sans-serif;font-size:15px;line-height:1.5">
+  <p>Sign in to Charlie:</p>
+  <p><a href="${href}" style="display:inline-block;padding:10px 18px;background:#111;color:#fff;text-decoration:none;border-radius:6px">Sign in to Charlie</a></p>
+  <p>Or paste this URL into your browser:</p>
+  <p><a href="${href}">${href}</a></p>
+  <p style="color:#666;font-size:13px">This link expires shortly and can be used once.</p>
+</div>`
         const res = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: {
@@ -75,8 +86,8 @@ function buildProviders(env: Env): AuthConfig['providers'] {
             from: env.AUTH_EMAIL_FROM ?? 'Charlie <onboarding@resend.dev>',
             to: identifier,
             subject: 'Sign in to Charlie',
-            html: `<p>Sign in to Charlie by clicking <a href="${url}">this link</a>. It expires shortly.</p>`,
-            text: `Sign in to Charlie: ${url}`,
+            html,
+            text: `Sign in to Charlie by opening this link (expires shortly, single use):\n\n${url}`,
           }),
         })
         if (!res.ok) {

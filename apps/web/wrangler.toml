@@ -70,13 +70,13 @@ enabled = true
 # come from .dev.vars locally and `wrangler secret put` in
 # production. AUTH_SECRET is REQUIRED (signs the Auth.js session JWT).
 [vars]
-APP_BASE_URL = "http://localhost:8787"
+APP_BASE_URL = "https://charlie.justraman.workers.dev"
 # Auth.js base URL. With trustHost enabled it's optional, but set it in prod to
 # match your deployed origin (e.g. "https://charlie.example.com/api/auth").
-AUTH_URL = "http://localhost:8787/api/auth"
-COOKIE_SECURE = ""
+AUTH_URL = "https://charlie.justraman.workers.dev/api/auth"
+COOKIE_SECURE = "true"
 ORG_NAME = "Charlie"
 # Comma-separated SSO allow-list (applies to every provider: Google, magic-link,
 # ...). The org row is created from this on first login; afterwards it is edited
 # in the DB / admin UI.
-ALLOWED_EMAIL_DOMAINS = ""
+ALLOWED_EMAIL_DOMAINS = "gmail.com"
