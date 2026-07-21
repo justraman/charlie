@@ -49,4 +49,17 @@ CHARLIE_RUN_TOKEN_SECRET=""
 # R2_BUCKET="charlie-artifacts"
 
 # --- Slack (Phase 6) — not required for Phase 1 ---
+# Both SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET must be set for Slack to be
+# "configured"; if either is absent, /charlie slash commands 401 and run
+# reports to Slack are skipped. Credentials come from a single-workspace Slack
+# app (see docs/SLACK.md). Set locally in apps/web/.dev.vars; in production use
+# `wrangler secret put <NAME>`.
+# Bot User OAuth Token (starts with xoxb-). Slack app → OAuth & Permissions.
+# SLACK_BOT_TOKEN=""
+# Signing Secret. Slack app → Basic Information → App Credentials.
 # SLACK_SIGNING_SECRET=""
+# Optional: pin inbound requests to one workspace (Txxxxxxxx). When set, requests
+# from any other team_id are rejected. Leave unset to accept the app's workspace.
+# SLACK_TEAM_ID=""
+# Local/dev only: point Slack Web API calls at a mock. Never set in production.
+# SLACK_API_BASE=""
