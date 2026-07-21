@@ -68,6 +68,24 @@ async function loadProject(db: Db, orgId: string, id: string): Promise<ProjectRo
   return row
 }
 
+// Rejects a project name that is already in use within the org (ignoring
+// soft-deleted rows). `excludeId` lets an update keep its own name.
+async function assertNameAvailable(
+  db: Db,
+  orgId: string,
+  name: string,
+  excludeId?: string,
+): Promise<void> {
+  const clash = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.org_id, orgId), eq(projects.name, name), isNull(projects.deleted_at)))
+    .get()
+  if (clash && clash.id !== excludeId) {
+    throw new HttpError('conflict', `A project named "${name}" already exists`)
+  }
+}
+
 async function uniqueSlug(db: Db, orgId: string, base: string): Promise<string> {
   const root = base || 'project'
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -112,6 +130,7 @@ projectsRoute.post('/', authorize({ capability: 'flows.write' }), async (c) => {
   const actor = c.get('auth')
   const db = createDb(c.env.DB)
   const body = await parseBody(c, createSchema)
+  await assertNameAvailable(db, actor.orgId, body.name)
   const slug = await uniqueSlug(db, actor.orgId, slugify(body.slug ?? body.name))
   const id = uuidv7()
   const now = new Date().toISOString()
@@ -176,6 +195,11 @@ projectsRoute.patch('/:id', authorize({ capability: 'flows.write' }), async (c) 
   const db = createDb(c.env.DB)
   const body = await parseBody(c, patchSchema)
   const before = await loadProject(db, actor.orgId, id)
+
+  // Reject a rename that would collide with another project in the org.
+  if (body.name !== undefined && body.name !== before.name) {
+    await assertNameAvailable(db, actor.orgId, body.name, id)
+  }
 
   // If a default environment is named, it must belong to this project.
   if (body.defaultEnvironmentId) {

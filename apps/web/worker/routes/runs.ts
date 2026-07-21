@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, type SQL } from 'drizzle-orm'
+import { and, asc, desc, eq, like, or, type SQL, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { createDb, type Db } from '../db/client'
@@ -82,6 +82,20 @@ const RUN_COLS = {
   finished_at: runsTable.finished_at,
 }
 
+// Whitelist of client sort keys → sortable columns. Anything else falls back
+// to queued_at so a bad `sort` param can't inject an arbitrary column.
+const SORT_COLUMNS = {
+  queuedAt: runsTable.queued_at,
+  status: runsTable.status,
+  engine: runsTable.engine,
+  trigger: runsTable.trigger,
+  id: runsTable.id,
+} as const
+type SortField = keyof typeof SORT_COLUMNS
+
+const DEFAULT_LIMIT = 25
+const MAX_LIMIT = 100
+
 async function loadRun(db: Db, orgId: string, id: string): Promise<RunRow> {
   const row = await db
     .select(RUN_COLS)
@@ -148,18 +162,58 @@ runs.get(
   async (c) => {
     const { orgId } = c.get('auth')
     const db = createDb(c.env.DB)
+
+    // --- filters ---
+    const clauses: SQL[] = [eq(runsTable.org_id, orgId)]
     const projectId = c.req.query('project')
     const status = c.req.query('status')
-    const clauses: SQL[] = [eq(runsTable.org_id, orgId)]
+    const engine = c.req.query('engine')
+    const search = c.req.query('search')?.trim()
     if (projectId) clauses.push(eq(runsTable.project_id, projectId))
     if (status) clauses.push(eq(runsTable.status, status))
-    const rows = await db
-      .select(RUN_COLS)
-      .from(runsTable)
-      .where(and(...clauses))
-      .orderBy(desc(runsTable.queued_at))
-      .limit(100)
-    return c.json({ runs: rows.map(runDto) })
+    if (engine) clauses.push(eq(runsTable.engine, engine))
+    if (search) {
+      // flow_selection is JSON text, so a LIKE matches on flow names too.
+      const term = `%${search}%`
+      clauses.push(
+        or(
+          like(runsTable.id, term),
+          like(runsTable.trigger, term),
+          like(runsTable.flow_selection, term),
+        ) as SQL,
+      )
+    }
+    const where = and(...clauses)
+
+    // --- sorting ---
+    const sortField: SortField =
+      (c.req.query('sort') as SortField) in SORT_COLUMNS
+        ? (c.req.query('sort') as SortField)
+        : 'queuedAt'
+    const direction = c.req.query('dir') === 'asc' ? asc : desc
+    // queued_at is the stable tiebreaker so paging is deterministic when the
+    // primary sort column has duplicate values.
+    const orderBy =
+      sortField === 'queuedAt'
+        ? [direction(runsTable.queued_at)]
+        : [direction(SORT_COLUMNS[sortField]), desc(runsTable.queued_at)]
+
+    // --- pagination ---
+    const limit = Math.min(Math.max(Number(c.req.query('limit')) || DEFAULT_LIMIT, 1), MAX_LIMIT)
+    const offset = Math.max(Math.trunc(Number(c.req.query('offset')) || 0), 0)
+
+    const [rows, totalRow] = await Promise.all([
+      db
+        .select(RUN_COLS)
+        .from(runsTable)
+        .where(where)
+        .orderBy(...orderBy)
+        .limit(limit)
+        .offset(offset),
+      db.select({ n: sql<number>`count(*)` }).from(runsTable).where(where).get(),
+    ])
+
+    return c.json({ runs: rows.map(runDto), total: totalRow?.n ?? 0, limit, offset })
   },
 )
 
