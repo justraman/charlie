@@ -2,7 +2,7 @@ import { and, asc, desc, eq, like, or, type SQL, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { createDb, type Db } from '../db/client'
-import { reports, run_shards, runs as runsTable, shard_results } from '../db/schema'
+import { projects, reports, run_shards, runs as runsTable, shard_results } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { githubConfigured } from '../lib/github'
@@ -22,6 +22,7 @@ const runs = new Hono<AppBindings>()
 interface RunRow {
   id: string
   project_id: string
+  project_name: string
   environment_id: string
   flow_selection: string
   engine: string
@@ -43,6 +44,7 @@ function runDto(row: RunRow) {
   return {
     id: row.id,
     projectId: row.project_id,
+    projectName: row.project_name,
     environmentId: row.environment_id,
     flowSelection: JSON.parse(row.flow_selection),
     engine: row.engine,
@@ -65,6 +67,7 @@ function runDto(row: RunRow) {
 const RUN_COLS = {
   id: runsTable.id,
   project_id: runsTable.project_id,
+  project_name: projects.name,
   environment_id: runsTable.environment_id,
   flow_selection: runsTable.flow_selection,
   engine: runsTable.engine,
@@ -100,6 +103,7 @@ async function loadRun(db: Db, orgId: string, id: string): Promise<RunRow> {
   const row = await db
     .select(RUN_COLS)
     .from(runsTable)
+    .innerJoin(projects, eq(projects.id, runsTable.project_id))
     .where(and(eq(runsTable.id, id), eq(runsTable.org_id, orgId)))
     .get()
   if (!row) throw new HttpError('not_found', 'Run not found')
@@ -206,6 +210,7 @@ runs.get(
       db
         .select(RUN_COLS)
         .from(runsTable)
+        .innerJoin(projects, eq(projects.id, runsTable.project_id))
         .where(where)
         .orderBy(...orderBy)
         .limit(limit)

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { createDb, type Db } from '../db/client'
@@ -79,7 +79,13 @@ async function assertNameAvailable(
   const clash = await db
     .select({ id: projects.id })
     .from(projects)
-    .where(and(eq(projects.org_id, orgId), eq(projects.name, name), isNull(projects.deleted_at)))
+    .where(
+      and(
+        eq(projects.org_id, orgId),
+        sql`lower(${projects.name}) = lower(${name})`,
+        isNull(projects.deleted_at),
+      ),
+    )
     .get()
   if (clash && clash.id !== excludeId) {
     throw new HttpError('conflict', `A project named "${name}" already exists`)

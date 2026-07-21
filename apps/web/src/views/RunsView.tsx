@@ -35,6 +35,8 @@ import { cn } from '@/lib/utils'
 
 interface Run {
   id: string
+  projectId: string
+  projectName: string
   engine: string
   profile: string
   status: string
@@ -42,6 +44,11 @@ interface Run {
   flowSelection: { name: string }[]
   queuedAt: string
   expectedShards: number
+}
+
+interface Project {
+  id: string
+  name: string
 }
 
 /** Semantic color classes for a run/shard status badge. */
@@ -75,17 +82,27 @@ type SortDir = 'asc' | 'desc'
 
 export function RunsView() {
   const [runs, setRuns] = useState<Run[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [total, setTotal] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [projectFilter, setProjectFilter] = useState<string>(ALL)
   const [statusFilter, setStatusFilter] = useState<string>(ALL)
   const [engineFilter, setEngineFilter] = useState<string>(ALL)
   const [sortKey, setSortKey] = useState<SortKey>('queuedAt')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [page, setPage] = useState(0)
+
+  // Project list for the filter dropdown — loaded once, independent of paging.
+  useEffect(() => {
+    api
+      .get<{ projects: Project[] }>('/api/projects')
+      .then((res) => setProjects(res.projects))
+      .catch(() => {})
+  }, [])
 
   // Debounce typing so we fire one request when the user pauses, not per key.
   // Reset to the first page whenever the query text settles.
@@ -108,6 +125,7 @@ export function RunsView() {
         offset: String(page * PAGE_SIZE),
       })
       if (debouncedSearch) params.set('search', debouncedSearch)
+      if (projectFilter !== ALL) params.set('project', projectFilter)
       if (statusFilter !== ALL) params.set('status', statusFilter)
       if (engineFilter !== ALL) params.set('engine', engineFilter)
       const res = await api.get<{ runs: Run[]; total: number }>(`/api/runs?${params}`)
@@ -118,12 +136,16 @@ export function RunsView() {
     } finally {
       setLoading(false)
     }
-  }, [debouncedSearch, statusFilter, engineFilter, sortKey, sortDir, page])
+  }, [debouncedSearch, projectFilter, statusFilter, engineFilter, sortKey, sortDir, page])
 
   useEffect(() => {
     void load()
   }, [load])
 
+  const changeProject = (value: string) => {
+    setProjectFilter(value)
+    setPage(0)
+  }
   const changeStatus = (value: string) => {
     setStatusFilter(value)
     setPage(0)
@@ -146,12 +168,14 @@ export function RunsView() {
 
   const clearFilters = () => {
     setSearch('')
+    setProjectFilter(ALL)
     setStatusFilter(ALL)
     setEngineFilter(ALL)
     setPage(0)
   }
 
-  const filtersActive = search.trim() !== '' || statusFilter !== ALL || engineFilter !== ALL
+  const filtersActive =
+    search.trim() !== '' || projectFilter !== ALL || statusFilter !== ALL || engineFilter !== ALL
   const from = total === 0 ? 0 : page * PAGE_SIZE + 1
   const to = Math.min(total, (page + 1) * PAGE_SIZE)
   const hasPrev = page > 0
@@ -187,6 +211,19 @@ export function RunsView() {
             className="pl-9"
           />
         </div>
+        <Select value={projectFilter} onValueChange={changeProject}>
+          <SelectTrigger className="w-48">
+            <SelectValue placeholder="Project" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>All projects</SelectItem>
+            {projects.map((p) => (
+              <SelectItem key={p.id} value={p.id}>
+                {p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={statusFilter} onValueChange={changeStatus}>
           <SelectTrigger className="w-40">
             <SelectValue placeholder="Status" />
@@ -231,6 +268,7 @@ export function RunsView() {
                 dir={sortDir}
                 onSort={toggleSort}
               />
+              <TableHead>Project</TableHead>
               <SortHeader
                 label="Engine"
                 sortKey="engine"
@@ -265,7 +303,7 @@ export function RunsView() {
           <TableBody>
             {runs.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-muted-foreground text-center">
+                <TableCell colSpan={7} className="text-muted-foreground text-center">
                   {filtersActive ? 'No runs match your filters.' : 'No runs yet.'}
                 </TableCell>
               </TableRow>
@@ -277,6 +315,7 @@ export function RunsView() {
                     {r.id.slice(0, 8)}
                   </Link>
                 </TableCell>
+                <TableCell className="font-medium">{r.projectName}</TableCell>
                 <TableCell>
                   <Badge variant="secondary">{r.engine}</Badge>
                 </TableCell>
