@@ -173,9 +173,19 @@ runs.get(
     const status = c.req.query('status')
     const engine = c.req.query('engine')
     const search = c.req.query('search')?.trim()
+    // `triggeredBy=me` scopes to the caller's own runs (dashboard); an explicit
+    // user id also works. Ignored for API keys, which have no user identity.
+    const triggeredByParam = c.req.query('triggeredBy')
+    const triggeredBy =
+      triggeredByParam === 'me'
+        ? c.get('auth').actorKind === 'user'
+          ? c.get('auth').actorId
+          : undefined
+        : triggeredByParam
     if (projectId) clauses.push(eq(runsTable.project_id, projectId))
     if (status) clauses.push(eq(runsTable.status, status))
     if (engine) clauses.push(eq(runsTable.engine, engine))
+    if (triggeredBy) clauses.push(eq(runsTable.triggered_by, triggeredBy))
     if (search) {
       // flow_selection is JSON text, so a LIKE matches on flow names too.
       const term = `%${search}%`

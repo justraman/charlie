@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { roleHasCapability } from '../../shared/roles'
 import { createDb, type Db } from '../db/client'
 import { environments, projects } from '../db/schema'
 import type { AppBindings } from '../env'
@@ -276,12 +277,23 @@ projectsRoute.patch('/:id', authorize({ capability: 'flows.write' }), async (c) 
   return c.json({ project: toDto(row) })
 })
 
-// --- DELETE /api/projects/:id (admin) — soft delete -------------------------
-projectsRoute.delete('/:id', authorize({ capability: 'projects.delete' }), async (c) => {
+// --- DELETE /api/projects/:id — soft delete ---------------------------------
+// Allowed for a human who either holds the `projects.delete` capability
+// (admin/owner) *or* created the project (its owner), so an editor can remove a
+// project they authored. API keys can never delete projects.
+projectsRoute.delete('/:id', async (c) => {
   const actor = c.get('auth')
   const id = c.req.param('id')
   const db = createDb(c.env.DB)
   const before = await loadProject(db, actor.orgId, id)
+
+  const isHuman = actor.actorKind === 'user' && actor.user
+  const isCreator = isHuman && actor.user?.id === before.created_by
+  const canDeleteAny = isHuman && roleHasCapability(actor.user!.role, 'projects.delete')
+  if (!isCreator && !canDeleteAny) {
+    throw new HttpError('forbidden', 'Only an admin or the project creator can delete this project')
+  }
+
   const now = new Date().toISOString()
 
   await writeAudited(

@@ -1,6 +1,6 @@
-import { AlertCircleIcon, ArrowLeftIcon, PlusIcon } from 'lucide-react'
+import { AlertCircleIcon, ArrowLeftIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
 import { EnvironmentPanel } from '@/components/EnvironmentPanel'
 import { PageHeader } from '@/components/page-header'
@@ -10,13 +10,16 @@ import { SuggestedFlowsPanel } from '@/components/SuggestedFlowsPanel'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -36,6 +39,7 @@ interface Project {
   description: string | null
   sourceRepo: string | null
   slackChannel: string | null
+  createdBy: string
 }
 interface Flow {
   id: string
@@ -48,11 +52,19 @@ interface Flow {
 
 export function ProjectDetailView() {
   const { id: projectId } = useParams<{ id: string }>()
-  const { can } = useAuth()
+  const { can, user } = useAuth()
+  const navigate = useNavigate()
   const [project, setProject] = useState<Project | null>(null)
   const [flows, setFlows] = useState<Flow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [channel, setChannel] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  // A project may be deleted by an admin/owner (projects.delete capability) or
+  // by the user who created it. Mirrors the check the Worker enforces.
+  const canDelete =
+    !!project && (can('projects.delete') || (!!user && user.id === project.createdBy))
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -77,6 +89,21 @@ export function ProjectDetailView() {
       await load()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err))
+    }
+  }
+
+  async function deleteProject() {
+    if (!projectId) return
+    setDeleting(true)
+    setError(null)
+    try {
+      await api.delete(`/api/projects/${projectId}`)
+      navigate('/projects')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
+      setConfirmDelete(false)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -226,6 +253,58 @@ export function ProjectDetailView() {
               </p>
             )}
           </section>
+
+          {canDelete && (
+            <Card className="border-destructive/50">
+              <CardHeader>
+                <CardTitle className="text-destructive">Danger zone</CardTitle>
+                <CardAction>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    <Trash2Icon />
+                    Delete project
+                  </Button>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground text-sm">
+                  Deleting removes this project along with its environments, flows, and schedules
+                  from Charlie. This cannot be undone from the dashboard.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          <Dialog open={confirmDelete} onOpenChange={(open) => !open && setConfirmDelete(false)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete project?</DialogTitle>
+                <DialogDescription>
+                  Delete "{project.name}"? Its environments, flows, and schedules will no longer be
+                  accessible. This cannot be undone from the dashboard.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button type="button" variant="outline" disabled={deleting}>
+                    Cancel
+                  </Button>
+                </DialogClose>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={deleting}
+                  onClick={deleteProject}
+                >
+                  {deleting ? 'Deleting…' : 'Delete project'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
       )}
     </div>
