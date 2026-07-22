@@ -16,6 +16,7 @@ import { createDb, type Db } from '../db/client'
 import { flow_versions, flows as flowsTable, projects, users } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
+import { expandFlowSteps } from '../lib/flow-expand'
 import { clientIp, HttpError, userAgent } from '../lib/http'
 import { uuidv7 } from '../lib/ids'
 import { parseBody } from '../lib/validate'
@@ -188,6 +189,9 @@ flows.post(
       .get()
     if (clash) throw new HttpError('conflict', `A flow named "${body.name}" already exists`)
 
+    // Validate any useFlow references up front (missing/foreign/code/cycle → 400).
+    if (body.kind === 'steps') await expandFlowSteps(db, projectId, body.steps)
+
     const flowId = uuidv7()
     const versionId = uuidv7()
     const now = new Date().toISOString()
@@ -331,6 +335,9 @@ flows.put('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), 
         }
       : null
     const nextBody: FlowBody = { steps: body.steps, loadProfile: body.loadProfile ?? null }
+    // Validate useFlow references; seed the cycle guard with this flow so a flow
+    // cannot include itself (directly or transitively).
+    await expandFlowSteps(db, flow.project_id, body.steps, { visited: new Set([flow.id]) })
     versionValues = {
       steps: JSON.stringify(body.steps),
       load_profile: body.loadProfile ? JSON.stringify(body.loadProfile) : null,

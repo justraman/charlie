@@ -14,6 +14,7 @@ Most teams stitch together three things by hand: a place to store test flows, a 
 
 - **One flow, two modes.** Author a flow once. Run it as a Playwright E2E check (does the journey work?) or feed the same intent into a k6 HTTP load scenario (does it work under N concurrent users?).
 - **Bring your own Playwright code.** For journeys too complex for step-based flows, point a flow at a GitHub repo of real Playwright tests. Charlie clones it, runs `playwright test` against the chosen environment, and reports back — code flows and step flows run side by side. See [docs/CUSTOM_TESTS.md](docs/CUSTOM_TESTS.md).
+- **Composable flows.** Reuse a group of steps across flows — author a `login` flow once and drop it into others as a single `useFlow` step; Charlie inlines its current steps at run time.
 - **Any project, any environment.** Register multiple projects; each has environments (`dev`, `qa`, `staging`, `prod`, or whatever you name) with their own base URL, headers, and secrets. Point a run at exactly one.
 - **Runs where and when you want.** Trigger manually from the dashboard, from Slack, on a cron interval, or automatically on a merge to a watched branch.
 - **Slack-native.** `/charlie run checkout --env qa` kicks off a run; results post back to the channel when they finish.
@@ -154,6 +155,10 @@ Phase 7 — AI-assisted flow generation:
 - Drafts POST back (analysis-token auth) and store as `origin = ai`, `status = draft`. **No environment secrets are ever sent** to the provider; drafts use `{{secrets.*}}` placeholders.
 - A draft is not runnable until an `editor` **approves** it, which mints a real flow + human-authored v1 (the AI is credited in `origin`); approval is audited.
 - SPA: AI provider settings, an "Analyze source repo" action, and a Suggested-flows review UI with the model's reasoning and source references, plus approve/reject.
+
+**Composable flows (`useFlow`):**
+
+- A step flow can include another steps flow via a `useFlow` step (e.g. a shared `login` group run first). The control plane inlines the referenced flow's **current** steps into the run bundle recursively — with same-project, no-code-reference, and cycle guards — so engines still receive a flat step list and extracted vars/headers carry forward. See [docs/TEST_ENGINES.md](docs/TEST_ENGINES.md#composing-flows-useflow).
 
 **Custom Playwright code flows:**
 

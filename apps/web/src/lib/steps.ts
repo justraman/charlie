@@ -11,13 +11,15 @@ export const STEP_ACTIONS = [
   'extract',
   'submit',
   'setHeader',
+  'useFlow',
 ] as const
 export type StepAction = (typeof STEP_ACTIONS)[number]
 
 export interface FieldDef {
   key: string
   label: string
-  type: 'text' | 'number' | 'select'
+  // 'flow' renders a picker of the project's other steps flows (dynamic options).
+  type: 'text' | 'number' | 'select' | 'flow'
   options?: string[]
   placeholder?: string
 }
@@ -53,6 +55,8 @@ export const ACTION_FIELDS: Record<StepAction, FieldDef[]> = {
     { key: 'name', label: 'Header name', type: 'text', placeholder: 'Authorization' },
     { key: 'value', label: 'Header value', type: 'text', placeholder: 'Bearer {{secrets.TOKEN}}' },
   ],
+  // Inline another flow's steps here (e.g. a shared login flow run first).
+  useFlow: [{ key: 'flowId', label: 'Flow to run', type: 'flow' }],
 }
 
 // The editor holds each step as a loose string map keyed by field.

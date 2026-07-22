@@ -57,10 +57,41 @@ A flow is engine-agnostic JSON: metadata plus an ordered list of steps. It is st
 | `extract` | `selector` \| `regex`, `as` | read value into vars | capture token/CSRF for later requests |
 | `submit` | `selector` (form) | submit form | HTTP POST with collected fields |
 | `setHeader` | `name`, `value` | set on context | set on request |
+| `useFlow` | `flowId` | inline another flow's steps here | inline another flow's steps here |
 
 Placeholders `{{secrets.NAME}}` and `{{vars.NAME}}` are resolved at runtime from the environment's decrypted secrets and from `extract`ed values. Secrets are injected on the compute plane only.
 
 `captureOnFail: true` triggers screenshot + trace capture (E2E) on that step's failure.
+
+### Composing flows (`useFlow`)
+
+A `useFlow` step inlines another **steps** flow at that position — a reusable
+group of steps. The canonical case is a shared **login** flow run before the rest:
+
+```jsonc
+{
+  "name": "checkout",
+  "engines": ["playwright"],
+  "steps": [
+    { "action": "useFlow", "flowId": "<the login flow's id>" },
+    { "action": "goto", "url": "/products/42" },
+    { "action": "click", "selector": "[data-test=add-to-cart]" }
+  ]
+}
+```
+
+- **Expansion happens on the control plane** when a run's bundle is built: each
+  `useFlow` is replaced by the referenced flow's **current-version** steps,
+  recursively, producing one flat step list. Engines (Playwright and k6) never
+  see `useFlow` — no engine changes, and the k6 compiler inlines the steps too.
+- Because expansion uses the referenced flow's *current* version, editing the
+  shared login flow immediately propagates to every flow that includes it.
+- Extracted `{{vars.*}}` and headers set inside an inlined flow **carry forward**
+  into the steps that follow it (it's one flat, sequential list) — so a login
+  flow that `extract`s a CSRF token or sets an auth header just works downstream.
+- **Constraints** (enforced at authoring and at run time): a reference must be a
+  `steps` flow in the **same project**; it cannot reference a `code` flow; and
+  cycles / excessive nesting are rejected with a clear error.
 
 ## Engine abstraction
 

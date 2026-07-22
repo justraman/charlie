@@ -89,6 +89,17 @@ const setHeaderStep = z.strictObject({
   ...commonStepFields,
 })
 
+// A reusable-group step: inline another steps flow here (e.g. a shared "login"
+// flow run before the rest). It is a pure reference — the control plane expands
+// it into the referenced flow's current steps when building a run, so engines
+// only ever see a flat step list (see docs/TEST_ENGINES.md, "Composing flows").
+const useFlowStep = z.strictObject({
+  action: z.literal('useFlow'),
+  /** Id of another `steps` flow in the same project to inline at this position. */
+  flowId: z.string().min(1).max(64),
+  ...commonStepFields,
+})
+
 export const stepSchema = z.discriminatedUnion('action', [
   gotoStep,
   clickStep,
@@ -98,6 +109,7 @@ export const stepSchema = z.discriminatedUnion('action', [
   extractStep,
   submitStep,
   setHeaderStep,
+  useFlowStep,
 ])
 
 export type FlowStep = z.infer<typeof stepSchema>

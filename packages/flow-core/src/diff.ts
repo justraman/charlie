@@ -10,9 +10,11 @@ function stepLabel(step: FlowStep, index: number): string {
       ? step.selector
       : 'url' in step && step.url
         ? step.url
-        : 'name' in step && step.name
-          ? step.name
-          : ''
+        : 'flowId' in step && step.flowId
+          ? `→ ${step.flowId}`
+          : 'name' in step && step.name
+            ? step.name
+            : ''
   return `#${index + 1} ${step.action}${target ? ` ${target}` : ''}`
 }
 

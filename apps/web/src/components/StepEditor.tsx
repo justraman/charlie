@@ -1,11 +1,4 @@
 import { ArrowDownIcon, ArrowUpIcon, PlusIcon, XIcon } from 'lucide-react'
-import {
-  ACTION_FIELDS,
-  type EditableStep,
-  makeStep,
-  STEP_ACTIONS,
-  type StepAction,
-} from '@/lib/steps'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -17,17 +10,26 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import {
+  ACTION_FIELDS,
+  type EditableStep,
+  makeStep,
+  STEP_ACTIONS,
+  type StepAction,
+} from '@/lib/steps'
 
 interface Props {
   value: EditableStep[]
   onChange: (next: EditableStep[]) => void
+  /** Other steps flows in the project, for the `useFlow` step's picker. */
+  flowOptions?: { id: string; name: string }[]
 }
 
 // Radix Select cannot use an empty-string item value, so the "none" option is
 // stored as a sentinel in the trigger and mapped back to '' for the step field.
 const FIELD_NONE = '__none__'
 
-export function StepEditor({ value, onChange }: Props) {
+export function StepEditor({ value, onChange, flowOptions = [] }: Props) {
   function replaceAt(i: number, step: EditableStep) {
     onChange(value.map((s, j) => (j === i ? step : s)))
   }
@@ -65,10 +67,7 @@ export function StepEditor({ value, onChange }: Props) {
             <span className="bg-background flex size-6 shrink-0 items-center justify-center rounded-full border text-xs">
               {i + 1}
             </span>
-            <Select
-              value={step.action}
-              onValueChange={(v) => changeAction(i, v as StepAction)}
-            >
+            <Select value={step.action} onValueChange={(v) => changeAction(i, v as StepAction)}>
               <SelectTrigger size="sm">
                 <SelectValue />
               </SelectTrigger>
@@ -121,12 +120,29 @@ export function StepEditor({ value, onChange }: Props) {
               return (
                 <div key={f.key} className="min-w-[200px] flex-1 space-y-2">
                   <Label htmlFor={fieldId}>{f.label}</Label>
-                  {f.type === 'select' ? (
+                  {f.type === 'flow' ? (
                     <Select
                       value={((step[f.key] as string) ?? '') || FIELD_NONE}
-                      onValueChange={(v) =>
-                        setField(i, f.key, v === FIELD_NONE ? '' : v)
-                      }
+                      onValueChange={(v) => setField(i, f.key, v === FIELD_NONE ? '' : v)}
+                    >
+                      <SelectTrigger id={fieldId} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={FIELD_NONE} disabled>
+                          Select a flow…
+                        </SelectItem>
+                        {flowOptions.map((o) => (
+                          <SelectItem key={o.id} value={o.id}>
+                            {o.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : f.type === 'select' ? (
+                    <Select
+                      value={((step[f.key] as string) ?? '') || FIELD_NONE}
+                      onValueChange={(v) => setField(i, f.key, v === FIELD_NONE ? '' : v)}
                     >
                       <SelectTrigger id={fieldId} className="w-full">
                         <SelectValue />

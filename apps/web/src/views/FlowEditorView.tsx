@@ -51,6 +51,8 @@ export function FlowEditorView() {
   const [profile, setProfile] = useState<Profile>('')
   const [steps, setSteps] = useState<EditableStep[]>([makeStep('goto')])
   const [code, setCode] = useState<CodeFields>(EMPTY_CODE)
+  const [projectRef, setProjectRef] = useState<string | undefined>(projectId)
+  const [flowOptions, setFlowOptions] = useState<{ id: string; name: string }[]>([])
   const [backTo, setBackTo] = useState('/projects')
   const [error, setError] = useState<string | null>(null)
   const [details, setDetails] = useState<unknown>(null)
@@ -59,6 +61,7 @@ export function FlowEditorView() {
   useEffect(() => {
     if (!isEdit) {
       setBackTo(`/projects/${projectId}`)
+      setProjectRef(projectId)
       return
     }
     ;(async () => {
@@ -82,6 +85,7 @@ export function FlowEditorView() {
         setKind(res.flow.kind ?? 'steps')
         setEngines(res.flow.engines)
         setBackTo(`/projects/${res.flow.projectId}`)
+        setProjectRef(res.flow.projectId)
         if (res.currentVersion) {
           if (res.flow.kind === 'code' && res.currentVersion.code) {
             const c = res.currentVersion.code
@@ -102,6 +106,25 @@ export function FlowEditorView() {
       }
     })()
   }, [isEdit, flowId, projectId])
+
+  // Load the project's other steps flows so a `useFlow` step can pick one.
+  useEffect(() => {
+    if (!projectRef) return
+    ;(async () => {
+      try {
+        const res = await api.get<{
+          flows: { id: string; name: string; kind?: FlowKind }[]
+        }>(`/api/projects/${projectRef}/flows`)
+        setFlowOptions(
+          res.flows
+            .filter((f) => (f.kind ?? 'steps') === 'steps' && f.id !== flowId)
+            .map((f) => ({ id: f.id, name: f.name })),
+        )
+      } catch {
+        // Non-fatal: the useFlow picker just shows no options.
+      }
+    })()
+  }, [projectRef, flowId])
 
   function toggleEngine(e: string) {
     setEngines((prev) => (prev.includes(e) ? prev.filter((x) => x !== e) : [...prev, e]))
@@ -369,7 +392,7 @@ export function FlowEditorView() {
             <CardTitle>Steps</CardTitle>
           </CardHeader>
           <CardContent>
-            <StepEditor value={steps} onChange={setSteps} />
+            <StepEditor value={steps} onChange={setSteps} flowOptions={flowOptions} />
           </CardContent>
         </Card>
       )}

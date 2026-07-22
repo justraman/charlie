@@ -21,8 +21,14 @@ describe('stepSchema', () => {
       { action: 'extract', selector: '#csrf', as: 'csrf' },
       { action: 'submit', selector: 'form' },
       { action: 'setHeader', name: 'X-Test', value: '1' },
+      { action: 'useFlow', flowId: '0191c3e2-0000-7000-8000-000000000001' },
     ]
     for (const s of steps) expect(stepSchema.safeParse(s).success).toBe(true)
+  })
+
+  test('useFlow requires a flowId', () => {
+    expect(stepSchema.safeParse({ action: 'useFlow' }).success).toBe(false)
+    expect(stepSchema.safeParse({ action: 'useFlow', flowId: '' }).success).toBe(false)
   })
 
   test('rejects an unknown action', () => {

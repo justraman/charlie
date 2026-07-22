@@ -11,6 +11,7 @@ import { createDb, type Db } from '../db/client'
 import { environments, flow_versions, runs } from '../db/schema'
 import type { AppBindings } from '../env'
 import { bearerToken } from '../lib/apikeys'
+import { expandFlowSteps } from '../lib/flow-expand'
 import { getInstallationToken, githubConfigured } from '../lib/github'
 import { HttpError } from '../lib/http'
 import { callRunDO } from '../lib/run-do'
@@ -24,6 +25,7 @@ const callbacks = new Hono<AppBindings>()
 interface RunAuthRow {
   id: string
   org_id: string
+  project_id: string
   environment_id: string
   engine: string
   profile: string
@@ -66,6 +68,7 @@ async function loadRunForCallback(db: Db, runId: string): Promise<RunAuthRow> {
     .select({
       id: runs.id,
       org_id: runs.org_id,
+      project_id: runs.project_id,
       environment_id: runs.environment_id,
       engine: runs.engine,
       profile: runs.profile,
@@ -107,11 +110,18 @@ callbacks.get('/runs/:id/bundle', runTokenAuth(), async (c) => {
     if (!v) continue
     const kind = sel.kind === 'code' || v.code_spec ? 'code' : 'steps'
     if (kind === 'code') hasCodeFlow = true
+    // Inline any `useFlow` references (e.g. a shared login flow) so the runner
+    // receives a flat step list. Seed the cycle guard with this flow's own id.
+    const rawSteps = JSON.parse(v.steps)
+    const steps =
+      kind === 'code'
+        ? rawSteps
+        : await expandFlowSteps(db, run.project_id, rawSteps, { visited: new Set([sel.flowId]) })
     flows.push({
       flowId: sel.flowId,
       name: sel.name,
       kind,
-      steps: JSON.parse(v.steps),
+      steps,
       loadProfile: v.load_profile ? JSON.parse(v.load_profile) : null,
       code: v.code_spec ? JSON.parse(v.code_spec) : null,
     })

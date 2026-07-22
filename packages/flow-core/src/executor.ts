@@ -127,6 +127,15 @@ export const actionRegistry: Record<StepAction, ActionHandler> = {
     if (step.action !== 'setHeader') return
     await ctx.adapter.setHeader(step.name, step.value)
   },
+  // `useFlow` is a compile-time reference: the control plane inlines the
+  // referenced flow's steps into the run bundle, so a well-formed run never
+  // reaches here. Reaching it means an unexpanded reference slipped through.
+  async useFlow(step) {
+    if (step.action !== 'useFlow') return
+    throw new Error(
+      `useFlow (flow ${step.flowId}) was not expanded before execution — this is a bug`,
+    )
+  },
 }
 
 /**
