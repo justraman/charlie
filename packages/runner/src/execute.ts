@@ -21,6 +21,7 @@ import {
 } from './api'
 import { runK6Shard } from './k6-engine'
 import { PlaywrightAdapter } from './playwright-adapter'
+import { runCodeFlow } from './playwright-project'
 
 export interface ExecuteOptions {
   cfg: RunnerConfig
@@ -99,14 +100,36 @@ export async function runExecute(opts: ExecuteOptions): Promise<void> {
       )
     }
   } else {
+    // A shard can carry a mix of `code` flows (real Playwright projects cloned
+    // from a repo) and `steps` flows (JSON executed by flow-core). They run on
+    // different paths: code flows shell out to `playwright test`; step flows
+    // share one browser context.
+    const codeFlows = flows.filter((f) => f.kind === 'code')
+    const stepFlows = flows.filter((f) => f.kind !== 'code')
+
+    if (codeFlows.length > 0) {
+      const workspaceRoot = join(tmpdir(), `charlie-code-${runId}-${shardIndex}`)
+      for (const flow of codeFlows) {
+        const upload = uploaderFor(cfg, runId, shardIndex, flow.name)
+        const r = await runCodeFlow({ flow, bundle, workspaceRoot, upload })
+        artifactKeys.push(...r.artifactKeys)
+        results.push({
+          flow: r.flow,
+          status: r.status,
+          durationMs: r.durationMs,
+          error: r.error,
+        })
+      }
+    }
+
     const { chromium } = await import('playwright-core')
     let browser: Browser | undefined
     try {
-      browser = await chromium.launch({ headless: true })
-      const context = await browser.newContext()
-      await context.setExtraHTTPHeaders(bundle.environment.headers)
-      for (let flowIdx = 0; flowIdx < flows.length; flowIdx++) {
-        const flow = flows[flowIdx]!
+      if (stepFlows.length > 0) browser = await chromium.launch({ headless: true })
+      const context = browser ? await browser.newContext() : undefined
+      if (context) await context.setExtraHTTPHeaders(bundle.environment.headers)
+      for (let flowIdx = 0; context && flowIdx < stepFlows.length; flowIdx++) {
+        const flow = stepFlows[flowIdx]!
         const page = await context.newPage()
         const upload = uploaderFor(cfg, runId, shardIndex, flow.name)
 

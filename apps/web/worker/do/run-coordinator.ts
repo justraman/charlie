@@ -104,7 +104,7 @@ interface Meta {
   orgId: string
   engine: 'playwright' | 'k6'
   expectedShards: number
-  flowSelection: { flowId: string; versionId: string; name: string }[]
+  flowSelection: { flowId: string; versionId: string; name: string; kind?: 'steps' | 'code' }[]
   shards: Record<number, ShardStatus>
   finalizeSeen: boolean
   terminal: boolean

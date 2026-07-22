@@ -1,9 +1,12 @@
 import {
+  type CodeSpec,
+  codeSpecSchema,
   ENGINES,
   type FlowBody,
   flowBodySchema,
-  flowDefinitionSchema,
+  flowCreateSchema,
   loadProfileSchema,
+  summarizeCodeDiff,
   summarizeFlowDiff,
 } from '@charlie/flow-core'
 import { and, asc, desc, eq, isNull } from 'drizzle-orm'
@@ -29,6 +32,7 @@ interface FlowRow {
   name: string
   description: string | null
   current_version_id: string | null
+  kind: string
   engines: string
   origin: string
   created_by: string
@@ -42,6 +46,7 @@ interface VersionRow {
   version: number
   steps: string
   load_profile: string | null
+  code_spec: string | null
   author_id: string
   diff_summary: string | null
   created_at: string
@@ -53,6 +58,7 @@ function flowDto(row: FlowRow, currentVersion: number | null) {
     projectId: row.project_id,
     name: row.name,
     description: row.description,
+    kind: row.kind,
     engines: JSON.parse(row.engines) as string[],
     origin: row.origin,
     currentVersion,
@@ -70,6 +76,7 @@ function versionDto(row: VersionRow) {
     version: row.version,
     steps: JSON.parse(row.steps),
     loadProfile: row.load_profile ? JSON.parse(row.load_profile) : null,
+    code: row.code_spec ? (JSON.parse(row.code_spec) as CodeSpec) : null,
     authorId: row.author_id,
     diffSummary: row.diff_summary,
     createdAt: row.created_at,
@@ -93,6 +100,7 @@ async function loadFlow(db: Db, orgId: string, id: string): Promise<FlowRow> {
       name: flowsTable.name,
       description: flowsTable.description,
       current_version_id: flowsTable.current_version_id,
+      kind: flowsTable.kind,
       engines: flowsTable.engines,
       origin: flowsTable.origin,
       created_by: flowsTable.created_by,
@@ -134,6 +142,7 @@ flows.get(
         name: flowsTable.name,
         description: flowsTable.description,
         current_version_id: flowsTable.current_version_id,
+        kind: flowsTable.kind,
         engines: flowsTable.engines,
         origin: flowsTable.origin,
         created_by: flowsTable.created_by,
@@ -151,7 +160,7 @@ flows.get(
   },
 )
 
-const createSchema = flowDefinitionSchema
+const createSchema = flowCreateSchema
 
 // --- POST /api/projects/:projectId/flows (editor) — create flow + v1 --------
 flows.post(
@@ -182,8 +191,28 @@ flows.post(
     const flowId = uuidv7()
     const versionId = uuidv7()
     const now = new Date().toISOString()
-    const flowBody: FlowBody = { steps: body.steps, loadProfile: body.loadProfile ?? null }
-    const diff = summarizeFlowDiff(null, flowBody)
+
+    // Both kinds store the same flow row shape; only the version body differs —
+    // steps flows persist `steps` (+ optional loadProfile), code flows persist a
+    // `code_spec` pointer with `steps` empty. Code flows are Playwright-only.
+    const isCode = body.kind === 'code'
+    const engines = body.engines
+    const versionValues = isCode
+      ? {
+          steps: '[]',
+          load_profile: null,
+          code_spec: JSON.stringify(body.code),
+          diff_summary: summarizeCodeDiff(null, body.code),
+        }
+      : {
+          steps: JSON.stringify(body.steps),
+          load_profile: body.loadProfile ? JSON.stringify(body.loadProfile) : null,
+          code_spec: null,
+          diff_summary: summarizeFlowDiff(null, {
+            steps: body.steps,
+            loadProfile: body.loadProfile ?? null,
+          }),
+        }
 
     await writeAudited(
       db,
@@ -195,7 +224,8 @@ flows.post(
           name: body.name,
           description: body.description ?? null,
           current_version_id: null,
-          engines: JSON.stringify(body.engines),
+          kind: body.kind,
+          engines: JSON.stringify(engines),
           origin: 'manual',
           created_by: actor.actorId,
           created_at: now,
@@ -205,11 +235,9 @@ flows.post(
           id: versionId,
           flow_id: flowId,
           version: 1,
-          steps: JSON.stringify(body.steps),
-          load_profile: body.loadProfile ? JSON.stringify(body.loadProfile) : null,
           author_id: actor.actorId,
-          diff_summary: diff,
           created_at: now,
+          ...versionValues,
         }),
         db
           .update(flowsTable)
@@ -223,7 +251,7 @@ flows.post(
         action: 'flow.create',
         entityType: 'flow',
         entityId: flowId,
-        after: { name: body.name, engines: body.engines, version: 1 },
+        after: { name: body.name, kind: body.kind, engines, version: 1 },
         ip: clientIp(c),
         userAgent: userAgent(c),
       },
@@ -248,10 +276,16 @@ flows.get('/flows/:id', authenticate, authorize({ capability: 'projects.view' })
   })
 })
 
-const putSchema = flowBodySchema.extend({
+// A flow's kind is fixed at creation, so PUT is validated against the flow's
+// own kind (resolved below) rather than a discriminated union on the body.
+const stepsPutSchema = flowBodySchema.extend({
   description: z.string().max(2000).nullish(),
   engines: z.array(z.enum(ENGINES)).min(1).optional(),
   loadProfile: loadProfileSchema.nullish(),
+})
+const codePutSchema = z.strictObject({
+  code: codeSpecSchema,
+  description: z.string().max(2000).nullish(),
 })
 
 // --- PUT /api/flows/:id (editor) — new version + diff -----------------------
@@ -260,25 +294,53 @@ flows.put('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), 
   const id = c.req.param('id')
   const db = createDb(c.env.DB)
   const flow = await loadFlow(db, actor.orgId, id)
-  const body = await parseBody(c, putSchema)
 
   const current = flow.current_version_id
     ? await loadVersion(db, flow.id, flow.current_version_id)
     : null
-  const prevBody: FlowBody | null = current
-    ? {
-        steps: JSON.parse(current.steps),
-        loadProfile: current.load_profile ? JSON.parse(current.load_profile) : null,
-      }
-    : null
-  const nextBody: FlowBody = { steps: body.steps, loadProfile: body.loadProfile ?? null }
   const nextVersion = (current?.version ?? 0) + 1
-  const diff = summarizeFlowDiff(prevBody, nextBody)
-
   const versionId = uuidv7()
   const now = new Date().toISOString()
-  const engines = body.engines ? JSON.stringify(body.engines) : flow.engines
-  const description = body.description === undefined ? flow.description : body.description
+
+  // Build the version body + flow-row updates for whichever kind this flow is.
+  let versionValues: {
+    steps: string
+    load_profile: string | null
+    code_spec: string | null
+    diff_summary: string
+  }
+  let engines = flow.engines
+  let description: string | null
+
+  if (flow.kind === 'code') {
+    const body = await parseBody(c, codePutSchema)
+    const prevCode: CodeSpec | null = current?.code_spec ? JSON.parse(current.code_spec) : null
+    versionValues = {
+      steps: '[]',
+      load_profile: null,
+      code_spec: JSON.stringify(body.code),
+      diff_summary: summarizeCodeDiff(prevCode, body.code),
+    }
+    description = body.description === undefined ? flow.description : body.description
+  } else {
+    const body = await parseBody(c, stepsPutSchema)
+    const prevBody: FlowBody | null = current
+      ? {
+          steps: JSON.parse(current.steps),
+          loadProfile: current.load_profile ? JSON.parse(current.load_profile) : null,
+        }
+      : null
+    const nextBody: FlowBody = { steps: body.steps, loadProfile: body.loadProfile ?? null }
+    versionValues = {
+      steps: JSON.stringify(body.steps),
+      load_profile: body.loadProfile ? JSON.stringify(body.loadProfile) : null,
+      code_spec: null,
+      diff_summary: summarizeFlowDiff(prevBody, nextBody),
+    }
+    if (body.engines) engines = JSON.stringify(body.engines)
+    description = body.description === undefined ? flow.description : body.description
+  }
+  const diff = versionValues.diff_summary
 
   await writeAudited(
     db,
@@ -287,11 +349,9 @@ flows.put('/flows/:id', authenticate, authorize({ capability: 'flows.write' }), 
         id: versionId,
         flow_id: flow.id,
         version: nextVersion,
-        steps: JSON.stringify(body.steps),
-        load_profile: body.loadProfile ? JSON.stringify(body.loadProfile) : null,
         author_id: actor.actorId,
-        diff_summary: diff,
         created_at: now,
+        ...versionValues,
       }),
       db
         .update(flowsTable)

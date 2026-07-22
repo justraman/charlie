@@ -136,6 +136,77 @@ export const flowBodySchema = z.strictObject({
 
 export type FlowBody = z.infer<typeof flowBodySchema>
 
+// --- Code flows --------------------------------------------------------------
+// A flow is one of two kinds. A `steps` flow is the engine-agnostic JSON above.
+// A `code` flow instead points at real Playwright test files in a GitHub repo,
+// for journeys too complex to express as steps. Code flows are Playwright-only
+// (there is no HTTP compilation), and are run by checking out the repo on the
+// compute plane and invoking `playwright test` — see docs/CUSTOM_TESTS.md.
+
+export const FLOW_KINDS = ['steps', 'code'] as const
+export type FlowKind = (typeof FLOW_KINDS)[number]
+
+/** owner/repo, matching GitHub's naming (letters, digits, `.`, `_`, `-`). */
+const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
+
+// The pointer a code flow stores: which repo, which ref, and how to select the
+// specs to run. The runner injects the target environment via env vars
+// (CHARLIE_BASE_URL, CHARLIE_SECRET_*) — the repo's playwright.config reads them.
+export const codeSpecSchema = z.strictObject({
+  /** GitHub "owner/repo" holding the Playwright project. */
+  repo: z.string().regex(REPO_RE, 'must be "owner/repo"'),
+  /** Branch, tag, or commit SHA. Default branch when omitted. */
+  ref: z.string().min(1).max(200).optional(),
+  /** Path within the repo containing the Playwright project (its package.json). */
+  workingDir: z.string().max(400).optional(),
+  /** Positional `playwright test` argument — a spec file, directory, or pattern. */
+  testFilter: z.string().max(400).optional(),
+  /** `playwright test --grep` title filter. */
+  grep: z.string().max(400).optional(),
+  /** Override the dependency-install command (auto-detected from lockfile otherwise). */
+  installCommand: z.string().max(400).optional(),
+  /** Override the whole test command (advanced escape hatch). */
+  testCommand: z.string().max(400).optional(),
+})
+
+export type CodeSpec = z.infer<typeof codeSpecSchema>
+
+// Code flows only ever run under Playwright.
+const codeFlowFields = {
+  kind: z.literal('code'),
+  name: z.string().min(1).max(120),
+  description: z.string().max(2000).optional(),
+  engines: z.array(z.literal('playwright')).min(1).default(['playwright']),
+  code: codeSpecSchema,
+}
+
+export const codeFlowDefinitionSchema = z.strictObject(codeFlowFields)
+export type CodeFlowDefinition = z.infer<typeof codeFlowDefinitionSchema>
+
+/** The versioned body of a code flow — the code pointer only. */
+export const codeFlowBodySchema = z.strictObject({
+  kind: z.literal('code'),
+  code: codeSpecSchema,
+})
+export type CodeFlowBody = z.infer<typeof codeFlowBodySchema>
+
+// The create payload for POST /flows accepts either kind. `kind` is the
+// discriminant; when absent we default to 'steps' so pre-`kind` clients (and the
+// existing API surface) keep working unchanged.
+const stepsFlowCreateSchema = flowDefinitionSchema.extend({
+  kind: z.literal('steps').default('steps'),
+})
+
+export const flowCreateSchema = z.preprocess(
+  (v) =>
+    v && typeof v === 'object' && !Array.isArray(v) && !('kind' in v)
+      ? { ...(v as Record<string, unknown>), kind: 'steps' }
+      : v,
+  z.discriminatedUnion('kind', [stepsFlowCreateSchema, codeFlowDefinitionSchema]),
+)
+
+export type FlowCreate = z.infer<typeof flowCreateSchema>
+
 // The structured-output contract for AI flow generation (docs/AI_FLOWGEN.md).
 // A provider must return an array of these; the ingest endpoint validates each
 // against this schema and rejects malformed output (never executes blind). The

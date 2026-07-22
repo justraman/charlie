@@ -211,6 +211,8 @@ export const flows = sqliteTable(
     name: text('name').notNull(),
     description: text('description'),
     current_version_id: text('current_version_id'), // FK → flow_versions (no constraint)
+    // 'steps' = engine-agnostic JSON steps; 'code' = Playwright specs in a repo.
+    kind: text('kind').notNull().default('steps'),
     engines: text('engines').notNull().default('[]'), // JSON array: ["playwright","k6"]
     origin: text('origin').notNull().default('manual'),
     created_by: text('created_by')
@@ -224,6 +226,9 @@ export const flows = sqliteTable(
     uniqueIndex('idx_flows_name').on(t.project_id, t.name).where(sql`${t.deleted_at} is null`),
     index('idx_flows_project').on(t.project_id),
     check('flows_origin_check', sql`${t.origin} in ('manual', 'recorder', 'ai')`),
+    // NB: `kind` values ('steps'|'code') are enforced at the API boundary (zod).
+    // A DB CHECK would force a full table rebuild here (SQLite cannot ADD a
+    // constraint in place), so we deliberately keep this an additive ADD COLUMN.
   ],
 )
 
@@ -236,8 +241,9 @@ export const flow_versions = sqliteTable(
       .notNull()
       .references(() => flows.id),
     version: integer('version').notNull(),
-    steps: text('steps').notNull(), // JSON FlowStep[]
+    steps: text('steps').notNull(), // JSON FlowStep[] ('[]' for code flows)
     load_profile: text('load_profile'), // JSON k6 stages/thresholds (nullable)
+    code_spec: text('code_spec'), // JSON CodeSpec for `code` flows (nullable)
     author_id: text('author_id')
       .notNull()
       .references(() => users.id),

@@ -2,6 +2,13 @@
 
 Charlie authors a flow **once** and runs it two ways: as a Playwright **E2E** test (correctness) or as a k6 **HTTP load** scenario (behaviour under concurrency). This document defines the flow format, the shared engine abstraction, and how each engine consumes a flow.
 
+> **Two kinds of flow.** Everything below describes a **`steps`** flow — the
+> engine-agnostic JSON that compiles to Playwright *or* k6. A flow can instead be
+> a **`code`** flow: a pointer to real Playwright test files in a GitHub repo, for
+> journeys too complex to express as steps. Code flows are Playwright-only and are
+> covered in [CUSTOM_TESTS.md](CUSTOM_TESTS.md); the rest of this document is about
+> steps flows.
+
 ## The flow format
 
 A flow is engine-agnostic JSON: metadata plus an ordered list of steps. It is stored immutably per version in `flow_versions.steps`.

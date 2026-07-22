@@ -30,7 +30,7 @@ export interface RunInit {
   orgId: string
   engine: 'playwright' | 'k6'
   expectedShards: number
-  flowSelection: { flowId: string; versionId: string; name: string }[]
+  flowSelection: { flowId: string; versionId: string; name: string; kind?: 'steps' | 'code' }[]
 }
 
 // Live snapshot / SSE event payload.

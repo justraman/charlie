@@ -1,7 +1,7 @@
 // Control-plane HTTP client. Every call is authorized by the run-scoped token
 // (CHARLIE_RUN_TOKEN), which authorizes exactly one run's callbacks.
 
-import type { FlowStep, LoadProfile } from '@charlie/flow-core'
+import type { CodeSpec, FlowStep, LoadProfile } from '@charlie/flow-core'
 
 export interface RunnerConfig {
   apiUrl: string
@@ -11,8 +11,12 @@ export interface RunnerConfig {
 export interface BundleFlow {
   flowId: string
   name: string
+  /** 'steps' = JSON step flow; 'code' = Playwright specs in a repo. */
+  kind: 'steps' | 'code'
   steps: FlowStep[]
   loadProfile: LoadProfile | null
+  /** Set when kind === 'code'; the repo/ref/filter to run. */
+  code: CodeSpec | null
 }
 
 export interface Bundle {
@@ -20,6 +24,8 @@ export interface Bundle {
   engine: 'playwright' | 'k6'
   profile: string
   expectedShards: number
+  /** Short-lived GitHub token for cloning code-flow repos (null if none needed). */
+  cloneToken: string | null
   environment: {
     baseUrl: string
     headers: Record<string, string>

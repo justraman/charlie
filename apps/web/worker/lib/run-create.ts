@@ -25,6 +25,7 @@ export interface FlowSelection {
   flowId: string
   versionId: string
   name: string
+  kind: 'steps' | 'code'
 }
 
 /** Resolve a project by id or slug within the org (live only). */
@@ -81,6 +82,7 @@ export async function resolveFlows(
       name: flows.name,
       current_version_id: flows.current_version_id,
       engines: flows.engines,
+      kind: flows.kind,
     })
     .from(flows)
     .where(
@@ -113,6 +115,7 @@ export async function resolveFlows(
     flowId: r.id,
     versionId: r.current_version_id as string,
     name: r.name,
+    kind: (r.kind === 'code' ? 'code' : 'steps') as 'steps' | 'code',
   }))
 }
 

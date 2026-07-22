@@ -20,10 +20,22 @@ import { ApiError, api } from '@/lib/api'
 import { deserializeStep, type EditableStep, makeStep, serializeStep } from '@/lib/steps'
 
 type Profile = '' | 'smoke' | 'load' | 'stress'
+type FlowKind = 'steps' | 'code'
+
+interface CodeFields {
+  repo: string
+  ref: string
+  workingDir: string
+  testFilter: string
+  grep: string
+}
+
+const EMPTY_CODE: CodeFields = { repo: '', ref: '', workingDir: '', testFilter: '', grep: '' }
 
 // Radix Select cannot use an empty-string item value, so "none" is stored as a
 // sentinel in the trigger and mapped back to '' for the actual state.
 const PROFILE_NONE = '__none__'
+const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
 
 export function FlowEditorView() {
   const params = useParams<{ projectId?: string; id?: string }>()
@@ -32,11 +44,13 @@ export function FlowEditorView() {
   const flowId = params.id
   const isEdit = !!flowId
 
+  const [kind, setKind] = useState<FlowKind>('steps')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [engines, setEngines] = useState<string[]>(['playwright'])
   const [profile, setProfile] = useState<Profile>('')
   const [steps, setSteps] = useState<EditableStep[]>([makeStep('goto')])
+  const [code, setCode] = useState<CodeFields>(EMPTY_CODE)
   const [backTo, setBackTo] = useState('/projects')
   const [error, setError] = useState<string | null>(null)
   const [details, setDetails] = useState<unknown>(null)
@@ -50,19 +64,38 @@ export function FlowEditorView() {
     ;(async () => {
       try {
         const res = await api.get<{
-          flow: { name: string; description: string | null; engines: string[]; projectId: string }
+          flow: {
+            name: string
+            description: string | null
+            kind?: FlowKind
+            engines: string[]
+            projectId: string
+          }
           currentVersion: {
             steps: Record<string, unknown>[]
             loadProfile: { profile?: string } | null
+            code: CodeFields | null
           } | null
         }>(`/api/flows/${flowId}`)
         setName(res.flow.name)
         setDescription(res.flow.description ?? '')
+        setKind(res.flow.kind ?? 'steps')
         setEngines(res.flow.engines)
         setBackTo(`/projects/${res.flow.projectId}`)
         if (res.currentVersion) {
-          setSteps(res.currentVersion.steps.map(deserializeStep))
-          setProfile((res.currentVersion.loadProfile?.profile as Profile) ?? '')
+          if (res.flow.kind === 'code' && res.currentVersion.code) {
+            const c = res.currentVersion.code
+            setCode({
+              repo: c.repo ?? '',
+              ref: c.ref ?? '',
+              workingDir: c.workingDir ?? '',
+              testFilter: c.testFilter ?? '',
+              grep: c.grep ?? '',
+            })
+          } else {
+            setSteps(res.currentVersion.steps.map(deserializeStep))
+            setProfile((res.currentVersion.loadProfile?.profile as Profile) ?? '')
+          }
         }
       } catch (err) {
         setError(err instanceof ApiError ? err.message : String(err))
@@ -74,30 +107,58 @@ export function FlowEditorView() {
     setEngines((prev) => (prev.includes(e) ? prev.filter((x) => x !== e) : [...prev, e]))
   }
 
+  // Strip empties so optional fields are omitted rather than sent as "".
+  function codePayload() {
+    const c: Record<string, string> = { repo: code.repo.trim() }
+    if (code.ref.trim()) c.ref = code.ref.trim()
+    if (code.workingDir.trim()) c.workingDir = code.workingDir.trim()
+    if (code.testFilter.trim()) c.testFilter = code.testFilter.trim()
+    if (code.grep.trim()) c.grep = code.grep.trim()
+    return c
+  }
+
   async function save() {
     setBusy(true)
     setError(null)
     setDetails(null)
-    const payloadSteps = steps.map(serializeStep)
-    const loadProfile = profile ? { profile } : null
     try {
-      if (isEdit) {
-        await api.put(`/api/flows/${flowId}`, {
-          steps: payloadSteps,
-          description: description.trim() || null,
-          engines,
-          loadProfile,
-        })
-        navigate(backTo)
+      if (kind === 'code') {
+        if (isEdit) {
+          await api.put(`/api/flows/${flowId}`, {
+            code: codePayload(),
+            description: description.trim() || null,
+          })
+          navigate(backTo)
+        } else {
+          await api.post(`/api/projects/${projectId}/flows`, {
+            kind: 'code',
+            name: name.trim(),
+            description: description.trim() || undefined,
+            code: codePayload(),
+          })
+          navigate(`/projects/${projectId}`)
+        }
       } else {
-        await api.post(`/api/projects/${projectId}/flows`, {
-          name: name.trim(),
-          description: description.trim() || undefined,
-          engines,
-          steps: payloadSteps,
-          loadProfile,
-        })
-        navigate(`/projects/${projectId}`)
+        const payloadSteps = steps.map(serializeStep)
+        const loadProfile = profile ? { profile } : null
+        if (isEdit) {
+          await api.put(`/api/flows/${flowId}`, {
+            steps: payloadSteps,
+            description: description.trim() || null,
+            engines,
+            loadProfile,
+          })
+          navigate(backTo)
+        } else {
+          await api.post(`/api/projects/${projectId}/flows`, {
+            name: name.trim(),
+            description: description.trim() || undefined,
+            engines,
+            steps: payloadSteps,
+            loadProfile,
+          })
+          navigate(`/projects/${projectId}`)
+        }
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -111,8 +172,11 @@ export function FlowEditorView() {
     }
   }
 
+  const codeValid = REPO_RE.test(code.repo.trim())
   const canSave =
-    !busy && engines.length > 0 && steps.length > 0 && (isEdit || name.trim().length > 0)
+    !busy &&
+    (isEdit || name.trim().length > 0) &&
+    (kind === 'code' ? codeValid : engines.length > 0 && steps.length > 0)
 
   return (
     <div className="space-y-6">
@@ -125,9 +189,7 @@ export function FlowEditorView() {
       <PageHeader
         title={isEdit ? `Edit flow: ${name}` : 'New flow'}
         description={
-          isEdit
-            ? 'Saving creates a new version with a diff against the current one.'
-            : undefined
+          isEdit ? 'Saving creates a new version with a diff against the current one.' : undefined
         }
       />
 
@@ -148,6 +210,26 @@ export function FlowEditorView() {
           <CardTitle>Flow details</CardTitle>
         </CardHeader>
         <CardContent className="max-w-lg space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="flow-kind">Flow type</Label>
+            {isEdit ? (
+              <p className="text-muted-foreground text-sm">
+                {kind === 'code' ? 'Custom Playwright code' : 'Steps'} (fixed for this flow)
+              </p>
+            ) : (
+              <Select value={kind} onValueChange={(v) => setKind(v as FlowKind)}>
+                <SelectTrigger id="flow-kind" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="steps">Steps — build a flow from actions</SelectItem>
+                  <SelectItem value="code">
+                    Custom Playwright code — run tests from a repo
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           {!isEdit && (
             <div className="space-y-2">
               <Label htmlFor="flow-name">Name</Label>
@@ -167,59 +249,130 @@ export function FlowEditorView() {
               onChange={(e) => setDescription(e.target.value)}
             />
           </div>
-          <div className="space-y-2">
-            <Label>Engines</Label>
-            <div className="flex flex-wrap gap-6 pt-1">
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="engine-playwright"
-                  checked={engines.includes('playwright')}
-                  onCheckedChange={() => toggleEngine('playwright')}
-                />
-                <Label htmlFor="engine-playwright" className="font-normal">
-                  playwright
-                </Label>
+          {kind === 'steps' && (
+            <>
+              <div className="space-y-2">
+                <Label>Engines</Label>
+                <div className="flex flex-wrap gap-6 pt-1">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id="engine-playwright"
+                      checked={engines.includes('playwright')}
+                      onCheckedChange={() => toggleEngine('playwright')}
+                    />
+                    <Label htmlFor="engine-playwright" className="font-normal">
+                      playwright
+                    </Label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id="engine-k6"
+                      checked={engines.includes('k6')}
+                      onCheckedChange={() => toggleEngine('k6')}
+                    />
+                    <Label htmlFor="engine-k6" className="font-normal">
+                      k6
+                    </Label>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="engine-k6"
-                  checked={engines.includes('k6')}
-                  onCheckedChange={() => toggleEngine('k6')}
-                />
-                <Label htmlFor="engine-k6" className="font-normal">
-                  k6
-                </Label>
+              <div className="space-y-2">
+                <Label htmlFor="flow-profile">Load profile (k6)</Label>
+                <Select
+                  value={profile || PROFILE_NONE}
+                  onValueChange={(v) => setProfile((v === PROFILE_NONE ? '' : v) as Profile)}
+                >
+                  <SelectTrigger id="flow-profile" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={PROFILE_NONE}>none</SelectItem>
+                    <SelectItem value="smoke">smoke</SelectItem>
+                    <SelectItem value="load">load</SelectItem>
+                    <SelectItem value="stress">stress</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="flow-profile">Load profile (k6)</Label>
-            <Select
-              value={profile || PROFILE_NONE}
-              onValueChange={(v) => setProfile((v === PROFILE_NONE ? '' : v) as Profile)}
-            >
-              <SelectTrigger id="flow-profile" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={PROFILE_NONE}>none</SelectItem>
-                <SelectItem value="smoke">smoke</SelectItem>
-                <SelectItem value="load">load</SelectItem>
-                <SelectItem value="stress">stress</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Steps</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <StepEditor value={steps} onChange={setSteps} />
-        </CardContent>
-      </Card>
+      {kind === 'code' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Custom Playwright test</CardTitle>
+          </CardHeader>
+          <CardContent className="max-w-lg space-y-4">
+            <p className="text-muted-foreground text-sm">
+              Charlie checks out this repo and runs <code>playwright test</code> against the
+              selected environment. Your <code>playwright.config</code> should read{' '}
+              <code>process.env.CHARLIE_BASE_URL</code>; secrets arrive as{' '}
+              <code>CHARLIE_SECRET_&lt;NAME&gt;</code>. See the example repo in the docs.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="code-repo">Repository (owner/repo)</Label>
+              <Input
+                id="code-repo"
+                value={code.repo}
+                onChange={(e) => setCode({ ...code, repo: e.target.value })}
+                placeholder="acme/web-e2e-tests"
+              />
+              {code.repo.trim() && !codeValid && (
+                <p className="text-destructive text-xs">Must be in the form "owner/repo".</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="code-ref">Git ref (optional)</Label>
+              <Input
+                id="code-ref"
+                value={code.ref}
+                onChange={(e) => setCode({ ...code, ref: e.target.value })}
+                placeholder="main (defaults to the repo's default branch)"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="code-dir">Working directory (optional)</Label>
+              <Input
+                id="code-dir"
+                value={code.workingDir}
+                onChange={(e) => setCode({ ...code, workingDir: e.target.value })}
+                placeholder="packages/e2e (where package.json lives)"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="code-filter">Test filter (optional)</Label>
+              <Input
+                id="code-filter"
+                value={code.testFilter}
+                onChange={(e) => setCode({ ...code, testFilter: e.target.value })}
+                placeholder="tests/checkout.spec.ts"
+              />
+              <p className="text-muted-foreground text-xs">
+                Passed to <code>playwright test</code> — a spec file, directory, or pattern.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="code-grep">Grep title filter (optional)</Label>
+              <Input
+                id="code-grep"
+                value={code.grep}
+                onChange={(e) => setCode({ ...code, grep: e.target.value })}
+                placeholder="@smoke"
+              />
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Steps</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <StepEditor value={steps} onChange={setSteps} />
+          </CardContent>
+        </Card>
+      )}
 
       <div>
         <Button type="button" disabled={!canSave} onClick={save}>

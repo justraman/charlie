@@ -1,0 +1,15 @@
+{
+  "name": "charlie-playwright-custom-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Example Playwright test repo you can import into Charlie as a `code` flow.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}

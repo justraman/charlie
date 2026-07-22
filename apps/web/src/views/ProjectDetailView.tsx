@@ -40,6 +40,7 @@ interface Project {
 interface Flow {
   id: string
   name: string
+  kind?: 'steps' | 'code'
   engines: string[]
   origin: string
   currentVersion: number | null
@@ -149,7 +150,12 @@ export function ProjectDetailView() {
                   )}
                   {flows.map((fl) => (
                     <TableRow key={fl.id}>
-                      <TableCell className="font-medium">{fl.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <span className="flex items-center gap-2">
+                          {fl.name}
+                          {fl.kind === 'code' && <Badge variant="outline">code</Badge>}
+                        </span>
+                      </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
                           {fl.engines.map((e) => (

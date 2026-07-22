@@ -13,6 +13,7 @@ Charlie is **not** tied to any framework, cloud, or domain. If it runs in a brow
 Most teams stitch together three things by hand: a place to store test flows, a way to run them at scale, and a way to see what happened. Charlie is that glue, opinionated and self-hostable:
 
 - **One flow, two modes.** Author a flow once. Run it as a Playwright E2E check (does the journey work?) or feed the same intent into a k6 HTTP load scenario (does it work under N concurrent users?).
+- **Bring your own Playwright code.** For journeys too complex for step-based flows, point a flow at a GitHub repo of real Playwright tests. Charlie clones it, runs `playwright test` against the chosen environment, and reports back — code flows and step flows run side by side. See [docs/CUSTOM_TESTS.md](docs/CUSTOM_TESTS.md).
 - **Any project, any environment.** Register multiple projects; each has environments (`dev`, `qa`, `staging`, `prod`, or whatever you name) with their own base URL, headers, and secrets. Point a run at exactly one.
 - **Runs where and when you want.** Trigger manually from the dashboard, from Slack, on a cron interval, or automatically on a merge to a watched branch.
 - **Slack-native.** `/charlie run checkout --env qa` kicks off a run; results post back to the channel when they finish.
@@ -85,6 +86,7 @@ Other confirmed decisions:
 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | D1 schema, entities, relationships, audit log |
 | [docs/AUTH.md](docs/AUTH.md) | Google SSO, sessions, RBAC, audit trail, API keys |
 | [docs/TEST_ENGINES.md](docs/TEST_ENGINES.md) | Flow format, Playwright + k6 execution, engine abstraction |
+| [docs/CUSTOM_TESTS.md](docs/CUSTOM_TESTS.md) | Code flows: run your own Playwright tests from a GitHub repo |
 | [docs/CI_INTEGRATION.md](docs/CI_INTEGRATION.md) | GitHub App, reusable workflow, dispatch, on-merge triggers, cron |
 | [docs/SLACK.md](docs/SLACK.md) | Slash commands, run reporting, install flow |
 | [docs/AI_FLOWGEN.md](docs/AI_FLOWGEN.md) | Source analysis, provider abstraction, flow drafting |
@@ -152,6 +154,12 @@ Phase 7 — AI-assisted flow generation:
 - Drafts POST back (analysis-token auth) and store as `origin = ai`, `status = draft`. **No environment secrets are ever sent** to the provider; drafts use `{{secrets.*}}` placeholders.
 - A draft is not runnable until an `editor` **approves** it, which mints a real flow + human-authored v1 (the AI is credited in `origin`); approval is audited.
 - SPA: AI provider settings, an "Analyze source repo" action, and a Suggested-flows review UI with the model's reasoning and source references, plus approve/reject.
+
+**Custom Playwright code flows:**
+
+- A flow can be a **`code`** flow — a pointer (`flow_versions.code_spec`) to a GitHub repo of real Playwright tests — alongside the existing `steps` flows (`flows.kind`, migration `0003`).
+- On a run, the runner clones the repo (with a short-lived, run-scoped GitHub App clone token minted into the bundle), installs its dependencies (package manager auto-detected from the lockfile), and runs `playwright test`, injecting the environment as `CHARLIE_BASE_URL` / `CHARLIE_HEADERS` / `CHARLIE_SECRET_*`. Pass/fail comes from Playwright's JSON report; the report and traces upload to R2 via the same shard-result pipeline as step flows.
+- A worked template ships in [`examples/playwright-custom-tests`](examples/playwright-custom-tests); the contract is documented in [docs/CUSTOM_TESTS.md](docs/CUSTOM_TESTS.md).
 
 See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 8: reporting depth, hardening & open-source release).
 

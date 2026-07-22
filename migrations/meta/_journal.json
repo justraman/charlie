@@ -22,6 +22,13 @@
       "when": 1784580274814,
       "tag": "0002_integrations_to_env",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1784741211657,
+      "tag": "0003_friendly_white_tiger",
+      "breakpoints": true
     }
   ]
 }

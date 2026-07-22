@@ -2,7 +2,7 @@
 // flow_versions.diff_summary and rendered in the history view. Deliberately
 // terse — a changelog line, not a full patch.
 
-import type { FlowBody, FlowStep } from './schema'
+import type { CodeSpec, FlowBody, FlowStep } from './schema'
 
 function stepLabel(step: FlowStep, index: number): string {
   const target =
@@ -59,4 +59,23 @@ export function summarizeFlowDiff(prev: FlowBody | null, next: FlowBody): string
   if (prevProfile !== nextProfile) lines.push('Changed load profile.')
 
   return lines.length > 0 ? lines.join(' ') : 'No changes.'
+}
+
+/** Terse changelog line between two code-flow versions (repo/ref/filter). */
+export function summarizeCodeDiff(prev: CodeSpec | null, next: CodeSpec): string {
+  if (!prev) return `Initial version — ${next.repo}${next.ref ? `@${next.ref}` : ''}.`
+
+  const lines: string[] = []
+  const field = (label: string, a?: string, b?: string) => {
+    if ((a ?? '') !== (b ?? '')) lines.push(`${label}: ${a || '∅'} → ${b || '∅'}.`)
+  }
+  field('repo', prev.repo, next.repo)
+  field('ref', prev.ref, next.ref)
+  field('working dir', prev.workingDir, next.workingDir)
+  field('test filter', prev.testFilter, next.testFilter)
+  field('grep', prev.grep, next.grep)
+  field('install command', prev.installCommand, next.installCommand)
+  field('test command', prev.testCommand, next.testCommand)
+
+  return lines.length > 0 ? `Changed ${lines.join(' ')}` : 'No changes.'
 }

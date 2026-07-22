@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  codeSpecSchema,
+  flowCreateSchema,
   flowDefinitionSchema,
   flowDraftArraySchema,
   flowDraftSchema,
@@ -82,6 +84,64 @@ describe('flowDefinitionSchema', () => {
       loadProfile: { profile: 'load', stages: [{ duration: '30sec', target: 1 }] },
     })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('codeSpecSchema', () => {
+  test('accepts a minimal spec (repo only)', () => {
+    expect(codeSpecSchema.safeParse({ repo: 'acme/e2e' }).success).toBe(true)
+  })
+
+  test('accepts a full spec', () => {
+    const r = codeSpecSchema.safeParse({
+      repo: 'acme/e2e',
+      ref: 'main',
+      workingDir: 'packages/e2e',
+      testFilter: 'tests/checkout.spec.ts',
+      grep: '@smoke',
+    })
+    expect(r.success).toBe(true)
+  })
+
+  test('rejects a repo that is not owner/repo', () => {
+    expect(codeSpecSchema.safeParse({ repo: 'not-a-slug' }).success).toBe(false)
+    expect(codeSpecSchema.safeParse({ repo: 'a/b/c' }).success).toBe(false)
+  })
+})
+
+describe('flowCreateSchema', () => {
+  test('defaults kind to "steps" when omitted (backward compatible)', () => {
+    const r = flowCreateSchema.safeParse({
+      name: 'checkout',
+      engines: ['playwright'],
+      steps: [{ action: 'goto', url: '/' }],
+    })
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.kind).toBe('steps')
+  })
+
+  test('accepts a code flow and defaults engines to playwright', () => {
+    const r = flowCreateSchema.safeParse({
+      kind: 'code',
+      name: 'checkout-suite',
+      code: { repo: 'acme/e2e', grep: '@smoke' },
+    })
+    expect(r.success).toBe(true)
+    if (r.success && r.data.kind === 'code') expect(r.data.engines).toEqual(['playwright'])
+  })
+
+  test('rejects a code flow missing its code spec', () => {
+    expect(flowCreateSchema.safeParse({ kind: 'code', name: 'x' }).success).toBe(false)
+  })
+
+  test('rejects a code flow that also carries steps', () => {
+    const r = flowCreateSchema.safeParse({
+      kind: 'code',
+      name: 'x',
+      code: { repo: 'a/b' },
+      steps: [{ action: 'goto', url: '/' }],
+    })
+    expect(r.success).toBe(false)
   })
 })
 

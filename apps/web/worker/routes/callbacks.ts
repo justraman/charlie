@@ -11,6 +11,7 @@ import { createDb, type Db } from '../db/client'
 import { environments, flow_versions, runs } from '../db/schema'
 import type { AppBindings } from '../env'
 import { bearerToken } from '../lib/apikeys'
+import { getInstallationToken, githubConfigured } from '../lib/github'
 import { HttpError } from '../lib/http'
 import { callRunDO } from '../lib/run-do'
 import { runTokenSecret, verifyRunToken } from '../lib/run-token'
@@ -88,22 +89,44 @@ callbacks.get('/runs/:id/bundle', runTokenAuth(), async (c) => {
     flowId: string
     versionId: string
     name: string
+    kind?: 'steps' | 'code'
   }[]
 
   const flows = []
+  let hasCodeFlow = false
   for (const sel of selection) {
     const v = await db
-      .select({ steps: flow_versions.steps, load_profile: flow_versions.load_profile })
+      .select({
+        steps: flow_versions.steps,
+        load_profile: flow_versions.load_profile,
+        code_spec: flow_versions.code_spec,
+      })
       .from(flow_versions)
       .where(eq(flow_versions.id, sel.versionId))
       .get()
     if (!v) continue
+    const kind = sel.kind === 'code' || v.code_spec ? 'code' : 'steps'
+    if (kind === 'code') hasCodeFlow = true
     flows.push({
       flowId: sel.flowId,
       name: sel.name,
+      kind,
       steps: JSON.parse(v.steps),
       loadProfile: v.load_profile ? JSON.parse(v.load_profile) : null,
+      code: v.code_spec ? JSON.parse(v.code_spec) : null,
     })
+  }
+
+  // Code flows are cloned on the compute plane. Mint a short-lived installation
+  // token so the runner can `git clone` the (private) test repo. Crosses into
+  // the compute plane by design, exactly like environment secrets below.
+  let cloneToken: string | null = null
+  if (hasCodeFlow && githubConfigured(c.env)) {
+    try {
+      cloneToken = await getInstallationToken(c.env)
+    } catch (err) {
+      console.error('[bundle] failed to mint clone token:', err)
+    }
   }
 
   const env = await db
@@ -126,6 +149,7 @@ callbacks.get('/runs/:id/bundle', runTokenAuth(), async (c) => {
     engine: run.engine,
     profile: run.profile,
     expectedShards: run.expected_shards,
+    cloneToken,
     environment: {
       baseUrl: env.base_url,
       headers: JSON.parse(env.headers) as Record<string, string>,
