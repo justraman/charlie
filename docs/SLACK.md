@@ -9,7 +9,7 @@ One Slack app for the workspace, connected once by an admin (`integration.connec
 Configured features:
 - **Slash command** `/charlie`.
 - **Interactivity** (buttons on result messages: re-run, open report).
-- **Bot token scopes:** `commands`, `chat:write`, `chat:write.public`.
+- **Bot token scopes:** `commands`, `chat:write`, `chat:write.public`, `files:write` (to attach the k6 PDF report), `users:read.email` (to map Slack users to Charlie accounts).
 
 ## Request verification
 
@@ -42,28 +42,65 @@ Examples:
 
 The Slack user is mapped to a Charlie user by verified email (Slack `users.info` → email → `users.email`). If unmapped, Charlie replies ephemerally with a link to log in once via Google SSO so the mapping can be established. The mapped user's **role** gates the command: triggering a run requires `editor`+ , exactly as in the web app, and the trigger is written to `audit_log` with `trigger = slack` and the resolved `actor_id`.
 
-## Reporting back
+## Reporting back — one thread per run
 
-When a run reaches a terminal state, the Run Coordinator DO's post-run step posts a Block Kit message to the originating channel:
+Each run gets a **Slack thread**, so a run's whole lifecycle is one collapsible
+conversation instead of a scatter of standalone messages.
 
-```
-✅ checkout · qa · playwright — passed in 42s
-   3/3 flows passed · 0 runtime errors
-   [ View report ]  [ Re-run ]
+1. **On start**, when the run's Coordinator DO initializes, Charlie posts the
+   parent message and captures its `ts` (persisted on `runs.slack_thread_ts`):
 
-❌ checkout · staging · k6(load) — failed
-   p95 1.9s (threshold <800ms) · error rate 4.2% (threshold <1%)
-   Failing threshold: http_req_duration
-   [ View report ]  [ Re-run ]
-```
+   ```
+   ⏳ Started flow "checkout" on checkout@qa   [ Track progress ]
+   ```
 
-- The **View report** button links to `/{project}/runs/{runId}` in the dashboard.
+2. **On completion**, the same parent message is **edited in place** — the
+   hourglass becomes a green check (pass) or red circle (fail) and the verb flips
+   from *Started* to *Completed* / *Failed*:
+
+   ```
+   ✅ Completed flow "checkout" on checkout@qa   [ View report ]  [ Re-run ]
+   🔴 Failed flow "checkout" on checkout@qa      [ View report ]  [ Re-run ]
+   ```
+
+3. **All results post as replies in that thread** — E2E summaries and k6 load
+   results alike — keeping the channel tidy.
+
+- The **View report** / **Track progress** button links to `/runs/{runId}` in the dashboard.
 - The **Re-run** button dispatches an identical run (subject to the clicker's role) and is itself audited.
-- Scheduled and on-merge runs can be configured to report to a default channel per project, so cron/merge results show up without anyone typing a command.
+- Scheduled and on-merge runs report into the project's **default channel** the
+  same way (a thread opens there when the run starts). If a run never opened a
+  thread (e.g. Slack was connected mid-run), the terminal message is posted
+  standalone and the results reply threads off it.
+
+### k6 load results — table, comparison, and PDF
+
+A k6 run's threaded reply carries three things:
+
+1. The **headline lines** (p95, error rate, breached thresholds) — unchanged from before.
+2. A **fixed-width metrics table** (Slack has no native tables, so it's a code
+   block) comparing this run to the **last run with the same settings**
+   (same project + environment + profile + flow set):
+
+   ```
+   METRIC          CURRENT   BASELINE  CHANGE
+   p50 latency     120 ms    150 ms    -20.0% better
+   p95 latency     190 ms    170 ms    +11.8% worse
+   error rate      0.40%     0.20%     +100.0% worse
+   ...
+   ```
+
+   Lower latency/error-rate and higher throughput count as *better*. When there
+   is no prior same-settings run, the reply says so.
+3. The **full report as a PDF**, uploaded into the thread (Slack `files:write`).
+   The same PDF is downloadable from the run's dashboard page (**Download PDF**),
+   and the raw k6 summary + charts remain on the dashboard in their existing form.
 
 ## Failure surfacing
 
-For E2E failures, the message includes the first failing step and a thumbnail link to the failure screenshot (R2, via a signed URL). For load failures, it names the breached threshold(s). Enough to triage from Slack; the full trace/HAR/report is one click away in the dashboard.
+For E2E failures, the reply includes the first failing flow/step. For load
+failures, it names the breached threshold(s). Enough to triage from Slack; the
+full trace/HAR/report is one click away in the dashboard.
 
 ## Rate limiting & abuse
 

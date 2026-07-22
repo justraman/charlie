@@ -3,6 +3,7 @@
 // so the parsing/verification/formatting can be unit-tested directly.
 
 import { constantTimeEqual } from './crypto'
+import type { LoadComparison } from './pdf'
 
 const encoder = new TextEncoder()
 
@@ -136,57 +137,222 @@ export const SLACK_HELP = [
   '`/charlie help`',
 ].join('\n')
 
-// --- Block Kit result message -----------------------------------------------
+// --- Threaded run reporting -------------------------------------------------
 
-export interface ResultMessageInput {
-  runId: string
+export type RunPhase = 'started' | 'passed' | 'failed'
+
+export interface RunParentInput {
+  phase: RunPhase
+  flowLabel: string
   project: string
   environment: string
-  engine: string
-  profile: string
-  status: string // passed | failed | cancelled
+  runId: string
   appBaseUrl: string
-  /** E2E: "3/3 flows passed" style line. */
-  e2eLine?: string | null
-  /** Load: threshold/percentile lines. */
-  loadLines?: string[]
-  reason?: string | null
 }
 
-/** Build the Block Kit blocks for a terminal run message. */
-export function buildResultBlocks(input: ResultMessageInput): unknown[] {
-  const icon = input.status === 'passed' ? '✅' : input.status === 'cancelled' ? '🟡' : '❌'
-  const engineLabel = input.engine === 'k6' ? `k6(${input.profile})` : input.engine
-  const header = `${icon} ${input.project} · ${input.environment} · ${engineLabel} — ${input.status}`
+/** The one-line title of a run's parent thread message, per phase. Hourglass
+ *  while running; green check / red circle once terminal. */
+export function runParentText(input: {
+  phase: RunPhase
+  flowLabel: string
+  project: string
+  environment: string
+}): string {
+  const where = `${input.project}@${input.environment}`
+  switch (input.phase) {
+    case 'started':
+      return `⏳ Started flow "${input.flowLabel}" on ${where}`
+    case 'passed':
+      return `✅ Completed flow "${input.flowLabel}" on ${where}`
+    case 'failed':
+      return `🔴 Failed flow "${input.flowLabel}" on ${where}`
+  }
+}
 
-  const detail: string[] = []
-  if (input.e2eLine) detail.push(input.e2eLine)
-  if (input.loadLines?.length) detail.push(...input.loadLines)
-  if (input.reason) detail.push(`_${input.reason}_`)
+/** Blocks for the parent thread message. "started" carries a track-progress
+ *  link; terminal phases carry View report + Re-run. */
+export function buildRunParentBlocks(input: RunParentInput): unknown[] {
+  const text = runParentText(input)
+  const runUrl = `${input.appBaseUrl.replace(/\/$/, '')}/runs/${input.runId}`
+  const blocks: unknown[] = [{ type: 'section', text: { type: 'mrkdwn', text: `*${text}*` } }]
+  const elements: unknown[] =
+    input.phase === 'started'
+      ? [
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Track progress' },
+            url: runUrl,
+            action_id: 'charlie_view_report',
+          },
+        ]
+      : [
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: 'View report' },
+            url: runUrl,
+            action_id: 'charlie_view_report',
+          },
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Re-run' },
+            value: input.runId,
+            action_id: 'charlie_rerun',
+          },
+        ]
+  blocks.push({ type: 'actions', elements })
+  return blocks
+}
 
-  const reportUrl = `${input.appBaseUrl.replace(/\/$/, '')}/runs/${input.runId}`
-  const blocks: unknown[] = [{ type: 'section', text: { type: 'mrkdwn', text: `*${header}*` } }]
-  if (detail.length) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: detail.join('\n') } })
+// --- k6 results as a table --------------------------------------------------
+
+export interface K6ReplySummary {
+  p50: number | null
+  p95: number | null
+  p99: number | null
+  rps: number | null
+  errorRate: number | null
+  requests: number | null
+  checksPassed: number | null
+  checksTotal: number | null
+  thresholds: { metric: string; expression: string; ok: boolean }[]
+}
+
+const ms = (v: number | null) => (v == null ? '—' : `${Math.round(v)} ms`)
+const rps = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)}/s`)
+const pctVal = (v: number | null) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`)
+function deltaCell(d: LoadComparison['p50'] | undefined): string {
+  if (!d || d.deltaPct == null) return '—'
+  const sign = d.deltaPct > 0 ? '+' : ''
+  const tag = d.better == null ? '' : d.better ? ' better' : ' worse'
+  return `${sign}${d.deltaPct.toFixed(1)}%${tag}`
+}
+
+/** A fixed-width text table of the headline metrics vs the baseline, meant for a
+ *  Slack ``` code block ``` (Slack has no native tables). */
+export function buildK6TableText(
+  summary: K6ReplySummary,
+  comparison?: LoadComparison | null,
+): string {
+  const rows: [string, string, string, string][] = [
+    [
+      'p50 latency',
+      ms(summary.p50),
+      ms(comparison?.p50.previous ?? null),
+      deltaCell(comparison?.p50),
+    ],
+    [
+      'p95 latency',
+      ms(summary.p95),
+      ms(comparison?.p95.previous ?? null),
+      deltaCell(comparison?.p95),
+    ],
+    [
+      'p99 latency',
+      ms(summary.p99),
+      ms(comparison?.p99.previous ?? null),
+      deltaCell(comparison?.p99),
+    ],
+    [
+      'requests/sec',
+      rps(summary.rps),
+      rps(comparison?.rps.previous ?? null),
+      deltaCell(comparison?.rps),
+    ],
+    [
+      'error rate',
+      pctVal(summary.errorRate),
+      pctVal(comparison?.errorRate.previous ?? null),
+      deltaCell(comparison?.errorRate),
+    ],
+    ['total requests', summary.requests == null ? '—' : String(summary.requests), '—', '—'],
+    [
+      'checks passed',
+      summary.checksTotal == null ? '—' : `${summary.checksPassed ?? 0}/${summary.checksTotal}`,
+      '—',
+      '—',
+    ],
+  ]
+  const header: [string, string, string, string] = ['METRIC', 'CURRENT', 'BASELINE', 'CHANGE']
+  const all = [header, ...rows]
+  const widths = [0, 1, 2, 3].map((col) => Math.max(...all.map((r) => r[col]!.length)))
+  const line = (r: [string, string, string, string]) =>
+    r
+      .map((cell, i) => cell.padEnd(widths[i]!))
+      .join('  ')
+      .trimEnd()
+  return [line(header), ...rows.map(line)].join('\n')
+}
+
+export interface K6ReplyInput {
+  summary: K6ReplySummary
+  comparison?: LoadComparison | null
+  hasPdf: boolean
+}
+
+/** Threaded reply for a k6 run: the existing headline lines (kept as-is) plus a
+ *  fixed-width comparison table. The PDF, when present, is uploaded separately. */
+export function buildK6ReplyBlocks(input: K6ReplyInput): unknown[] {
+  const { summary, comparison } = input
+  const lines: string[] = []
+  if (typeof summary.p95 === 'number') lines.push(`p95 ${Math.round(summary.p95)}ms`)
+  if (typeof summary.errorRate === 'number')
+    lines.push(`error rate ${(summary.errorRate * 100).toFixed(2)}%`)
+  const breached = summary.thresholds.filter((t) => !t.ok).map((t) => t.metric)
+  if (breached.length) lines.push(`Failing threshold: ${breached.join(', ')}`)
+
+  const blocks: unknown[] = [
+    { type: 'section', text: { type: 'mrkdwn', text: '*k6 load results*' } },
+  ]
+  if (lines.length) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } })
   }
   blocks.push({
-    type: 'actions',
-    elements: [
-      {
-        type: 'button',
-        text: { type: 'plain_text', text: 'View report' },
-        url: reportUrl,
-        action_id: 'charlie_view_report',
-      },
-      {
-        type: 'button',
-        text: { type: 'plain_text', text: 'Re-run' },
-        value: input.runId,
-        action_id: 'charlie_rerun',
-      },
-    ],
+    type: 'section',
+    text: { type: 'mrkdwn', text: `\`\`\`\n${buildK6TableText(summary, comparison)}\n\`\`\`` },
   })
+  if (comparison) {
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `Compared with the last run of the same settings${comparison.baselineAt ? ` (${comparison.baselineAt})` : ''}.`,
+        },
+      ],
+    })
+  } else {
+    blocks.push({
+      type: 'context',
+      elements: [
+        { type: 'mrkdwn', text: 'No previous run with the same settings to compare against.' },
+      ],
+    })
+  }
+  if (input.hasPdf) {
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: '📎 Full report attached as PDF.' }],
+    })
+  }
   return blocks
+}
+
+export interface E2EReplyInput {
+  flowsPassed: number
+  flowsFailed: number
+  firstFailingFlow?: string | null
+  firstFailingStep?: number | null
+}
+
+/** Threaded reply for an E2E run: the flows-passed line and first failure. */
+export function buildE2EReplyBlocks(input: E2EReplyInput): unknown[] {
+  const total = input.flowsPassed + input.flowsFailed
+  let text = `*E2E results*\n${input.flowsPassed}/${total} flows passed`
+  if (input.firstFailingFlow) {
+    text += `\nFirst failure: ${input.firstFailingFlow}`
+    if (typeof input.firstFailingStep === 'number') text += ` (step ${input.firstFailingStep})`
+  }
+  return [{ type: 'section', text: { type: 'mrkdwn', text } }]
 }
 
 // --- Slack Web API ----------------------------------------------------------
@@ -251,15 +417,94 @@ export async function usersInfoEmail(
   return user?.profile?.email ?? null
 }
 
-/** Post a Block Kit message to a channel. */
+/** Post a Block Kit message to a channel (optionally as a threaded reply). */
 export async function postMessage(
   botToken: string,
   channel: string,
   blocks: unknown[],
   text: string,
+  opts: { threadTs?: string | null; apiBase?: string } = {},
+): Promise<SlackApiResponse> {
+  const body: Record<string, unknown> = { channel, blocks, text }
+  if (opts.threadTs) body.thread_ts = opts.threadTs
+  return slackApi(botToken, 'chat.postMessage', body, opts.apiBase)
+}
+
+/** Edit an existing message in place (chat.update) — used to flip the parent
+ *  "Started" message to "Completed"/"Failed" when a run reaches a terminal state. */
+export async function updateMessage(
+  botToken: string,
+  channel: string,
+  ts: string,
+  blocks: unknown[],
+  text: string,
   apiBase?: string,
 ): Promise<SlackApiResponse> {
-  return slackApi(botToken, 'chat.postMessage', { channel, blocks, text }, apiBase)
+  return slackApi(botToken, 'chat.update', { channel, ts, blocks, text }, apiBase)
+}
+
+/** POST to the Slack Web API with a form-encoded body (a few endpoints — notably
+ *  files.getUploadURLExternal — require this rather than JSON). */
+async function slackApiForm(
+  botToken: string,
+  method: string,
+  params: Record<string, string>,
+  apiBase: string = SLACK_API_BASE,
+): Promise<SlackApiResponse> {
+  const res = await fetch(`${apiBase.replace(/\/$/, '')}/${method}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${botToken}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(params).toString(),
+  })
+  return (await res.json()) as SlackApiResponse
+}
+
+/**
+ * Upload a file and share it into a channel thread using Slack's external-upload
+ * flow (getUploadURLExternal → PUT/POST bytes → completeUploadExternal). Needs
+ * the `files:write` scope. Best-effort: returns false on any failure so callers
+ * can carry on without the attachment.
+ */
+export async function uploadFileToThread(
+  botToken: string,
+  args: {
+    channel: string
+    threadTs?: string | null
+    filename: string
+    title: string
+    bytes: Uint8Array
+  },
+  apiBase?: string,
+): Promise<boolean> {
+  const getUrl = await slackApiForm(
+    botToken,
+    'files.getUploadURLExternal',
+    { filename: args.filename, length: String(args.bytes.byteLength) },
+    apiBase,
+  )
+  if (!getUrl.ok || typeof getUrl.upload_url !== 'string' || typeof getUrl.file_id !== 'string') {
+    return false
+  }
+
+  const form = new FormData()
+  form.append('file', new Blob([args.bytes as BlobPart]), args.filename)
+  const up = await fetch(getUrl.upload_url as string, { method: 'POST', body: form })
+  if (!up.ok) return false
+
+  const complete = await slackApi(
+    botToken,
+    'files.completeUploadExternal',
+    {
+      files: [{ id: getUrl.file_id, title: args.title }],
+      channel_id: args.channel,
+      ...(args.threadTs ? { thread_ts: args.threadTs } : {}),
+    },
+    apiBase,
+  )
+  return complete.ok === true
 }
 
 /** Reply to a slash command's response_url (ephemeral by default). */

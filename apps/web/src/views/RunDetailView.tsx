@@ -1,4 +1,4 @@
-import { AlertCircleIcon, ArrowLeftIcon } from 'lucide-react'
+import { AlertCircleIcon, ArrowLeftIcon, DownloadIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
@@ -43,6 +43,7 @@ interface RunDetail {
     totals: Record<string, unknown> | null
     e2eSummary: Record<string, unknown> | null
     loadSummary: LoadSummary | null
+    pdfReportKey?: string | null
   } | null
 }
 
@@ -50,6 +51,21 @@ interface LoadThreshold {
   metric: string
   expression: string
   ok: boolean
+}
+interface LoadDelta {
+  current: number | null
+  previous: number | null
+  deltaPct: number | null
+  better: boolean | null
+}
+interface LoadComparison {
+  baselineRunId: string
+  baselineAt: string | null
+  p50: LoadDelta
+  p95: LoadDelta
+  p99: LoadDelta
+  rps: LoadDelta
+  errorRate: LoadDelta
 }
 interface LoadSummary {
   p50: number | null
@@ -62,6 +78,7 @@ interface LoadSummary {
   checksTotal: number | null
   thresholds: LoadThreshold[]
   passed: boolean
+  comparison?: LoadComparison | null
 }
 
 const TERMINAL = ['passed', 'failed', 'cancelled']
@@ -69,6 +86,66 @@ const TERMINAL = ['passed', 'failed', 'cancelled']
 const ms = (v: number | null) => (v == null ? '—' : `${Math.round(v)} ms`)
 const rate = (v: number | null) => (v == null ? '—' : `${v.toFixed(1)}/s`)
 const pct = (v: number | null) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`)
+
+/** A ± percentage badge for a metric's change vs the baseline run. */
+function DeltaBadge({ delta }: { delta: LoadDelta }) {
+  if (delta.deltaPct == null) return <span className="text-muted-foreground">—</span>
+  const sign = delta.deltaPct > 0 ? '+' : ''
+  const color =
+    delta.better == null
+      ? 'text-muted-foreground'
+      : delta.better
+        ? 'text-emerald-600 dark:text-emerald-400'
+        : 'text-red-600 dark:text-red-400'
+  return (
+    <span className={cn('font-medium tabular-nums', color)}>
+      {sign}
+      {delta.deltaPct.toFixed(1)}%
+    </span>
+  )
+}
+
+/** Comparison of the headline metrics against the last run of the same settings. */
+function LoadComparisonTable({ comparison }: { comparison: LoadComparison }) {
+  const rows: { label: string; delta: LoadDelta; fmt: (v: number | null) => string }[] = [
+    { label: 'p50 latency', delta: comparison.p50, fmt: ms },
+    { label: 'p95 latency', delta: comparison.p95, fmt: ms },
+    { label: 'p99 latency', delta: comparison.p99, fmt: ms },
+    { label: 'requests/sec', delta: comparison.rps, fmt: rate },
+    { label: 'error rate', delta: comparison.errorRate, fmt: pct },
+  ]
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-medium">Compared with last run</h3>
+      <div className="overflow-x-auto rounded-md border">
+        <table className="w-full text-sm">
+          <thead className="text-muted-foreground text-[11px] uppercase tracking-wide">
+            <tr className="border-b">
+              <th className="px-3 py-2 text-left font-medium">Metric</th>
+              <th className="px-3 py-2 text-right font-medium">Current</th>
+              <th className="px-3 py-2 text-right font-medium">Baseline</th>
+              <th className="px-3 py-2 text-right font-medium">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.label} className="border-b last:border-0">
+                <td className="px-3 py-1.5">{r.label}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{r.fmt(r.delta.current)}</td>
+                <td className="text-muted-foreground px-3 py-1.5 text-right tabular-nums">
+                  {r.fmt(r.delta.previous)}
+                </td>
+                <td className="px-3 py-1.5 text-right">
+                  <DeltaBadge delta={r.delta} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
 
 /** Semantic color classes for a run/shard status badge. */
 function statusBadge(status: string): string {
@@ -118,9 +195,7 @@ function LoadReport({ summary }: { summary: LoadSummary }) {
     {
       label: 'checks passed',
       value:
-        summary.checksTotal != null
-          ? `${summary.checksPassed ?? 0}/${summary.checksTotal}`
-          : '—',
+        summary.checksTotal != null ? `${summary.checksPassed ?? 0}/${summary.checksTotal}` : '—',
     },
   ]
   return (
@@ -135,6 +210,8 @@ function LoadReport({ summary }: { summary: LoadSummary }) {
           </div>
         ))}
       </div>
+
+      {summary.comparison && <LoadComparisonTable comparison={summary.comparison} />}
 
       <div>
         <h3 className="mb-2 text-sm font-medium">Latency distribution</h3>
@@ -330,10 +407,7 @@ export function RunDetailView() {
                 key={i}
                 className="bg-muted/40 inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs"
               >
-                <span
-                  className={cn('size-2 rounded-full', shardDot(shardStatus(i)))}
-                  aria-hidden
-                />
+                <span className={cn('size-2 rounded-full', shardDot(shardStatus(i)))} aria-hidden />
                 #{i} {shardStatus(i)}
               </span>
             ))}
@@ -351,8 +425,21 @@ export function RunDetailView() {
 
       {detail.report && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
             <CardTitle>Report</CardTitle>
+            {detail.report.pdfReportKey && (
+              <Button asChild variant="outline" size="sm">
+                <a
+                  href={`/api/runs/${detail.run.id}/artifact?key=${encodeURIComponent(detail.report.pdfReportKey)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  download={`k6-report-${detail.run.id.slice(0, 8)}.pdf`}
+                >
+                  <DownloadIcon />
+                  Download PDF
+                </a>
+              </Button>
+            )}
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm">
@@ -398,11 +485,7 @@ export function RunDetailView() {
                   const name = key.split('/').slice(-2).join('/')
                   return key.endsWith('.png') ? (
                     <a key={key} href={url} target="_blank" rel="noreferrer">
-                      <img
-                        src={url}
-                        alt={name}
-                        className="max-w-[240px] rounded-lg border"
-                      />
+                      <img src={url} alt={name} className="max-w-[240px] rounded-lg border" />
                     </a>
                   ) : (
                     <a

@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { buildResultBlocks, parseSlackCommand, verifySlackSignature } from '../worker/lib/slack'
+import {
+  buildK6ReplyBlocks,
+  buildK6TableText,
+  buildRunParentBlocks,
+  parseSlackCommand,
+  runParentText,
+  verifySlackSignature,
+} from '../worker/lib/slack'
 
 async function sign(secret: string, ts: number, body: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -89,40 +96,114 @@ describe('parseSlackCommand', () => {
   })
 })
 
-describe('buildResultBlocks', () => {
-  test('passed run has a header and a View report url button', () => {
-    const blocks = buildResultBlocks({
-      runId: 'run1',
-      project: 'demo',
-      environment: 'qa',
-      engine: 'playwright',
-      profile: 'smoke',
-      status: 'passed',
-      appBaseUrl: 'https://charlie.example.com',
-      e2eLine: '3/3 flows passed',
-    }) as { type: string; text?: { text: string }; elements?: { url?: string }[] }[]
-    const header = blocks[0] as { text: { text: string } }
-    expect(header.text.text).toContain('✅')
-    expect(header.text.text).toContain('demo · qa · playwright — passed')
-    const actions = blocks.find((b) => b.type === 'actions')!
-    expect(actions.elements?.[0]?.url).toBe('https://charlie.example.com/runs/run1')
+describe('runParentText', () => {
+  const base = { flowLabel: 'checkout', project: 'demo', environment: 'qa' }
+  test('started uses the hourglass and "Started flow"', () => {
+    expect(runParentText({ ...base, phase: 'started' })).toBe(
+      '⏳ Started flow "checkout" on demo@qa',
+    )
   })
+  test('passed uses green check + Completed, failed uses red circle', () => {
+    expect(runParentText({ ...base, phase: 'passed' })).toBe(
+      '✅ Completed flow "checkout" on demo@qa',
+    )
+    expect(runParentText({ ...base, phase: 'failed' })).toBe('🔴 Failed flow "checkout" on demo@qa')
+  })
+})
 
-  test('failed load run lists the breached threshold lines', () => {
-    const blocks = buildResultBlocks({
-      runId: 'run2',
-      project: 'demo',
-      environment: 'staging',
-      engine: 'k6',
-      profile: 'load',
-      status: 'failed',
-      appBaseUrl: 'https://c.example.com/',
-      loadLines: ['p95 1900ms (threshold p(95)<800)', 'error rate 4.2%'],
-    }) as { type: string; text?: { text: string } }[]
-    const header = blocks[0] as { text: { text: string } }
-    expect(header.text.text).toContain('❌')
-    expect(header.text.text).toContain('k6(load)')
-    const body = blocks[1] as { text: { text: string } }
-    expect(body.text.text).toContain('p95 1900ms')
+describe('buildRunParentBlocks', () => {
+  const base = {
+    flowLabel: 'checkout',
+    project: 'demo',
+    environment: 'qa',
+    runId: 'run1',
+    appBaseUrl: 'https://c.example.com',
+  }
+  test('started shows a Track progress link, no Re-run', () => {
+    const blocks = buildRunParentBlocks({ ...base, phase: 'started' }) as {
+      type: string
+      elements?: { text?: { text: string }; url?: string; action_id?: string }[]
+    }[]
+    const actions = blocks.find((b) => b.type === 'actions')!
+    expect(actions.elements).toHaveLength(1)
+    expect(actions.elements?.[0]?.text?.text).toBe('Track progress')
+    expect(actions.elements?.[0]?.url).toBe('https://c.example.com/runs/run1')
+  })
+  test('terminal shows View report + Re-run', () => {
+    const blocks = buildRunParentBlocks({ ...base, phase: 'failed' }) as {
+      type: string
+      elements?: { action_id?: string }[]
+    }[]
+    const actions = blocks.find((b) => b.type === 'actions')!
+    expect(actions.elements?.map((e) => e.action_id)).toEqual([
+      'charlie_view_report',
+      'charlie_rerun',
+    ])
+  })
+})
+
+describe('buildK6TableText', () => {
+  const summary = {
+    p50: 120,
+    p95: 190,
+    p99: 240,
+    rps: 42.5,
+    errorRate: 0.004,
+    requests: 5100,
+    checksPassed: 5090,
+    checksTotal: 5100,
+    thresholds: [{ metric: 'http_req_duration', expression: 'p(95)<800', ok: true }],
+  }
+  test('renders aligned columns with a header row', () => {
+    const table = buildK6TableText(summary)
+    const lines = table.split('\n')
+    expect(lines[0]).toContain('METRIC')
+    expect(lines[0]).toContain('CURRENT')
+    expect(lines[0]).toContain('BASELINE')
+    expect(lines[0]).toContain('CHANGE')
+    expect(table).toContain('p95 latency')
+    expect(table).toContain('190 ms')
+  })
+  test('shows baseline values and signed change when a comparison is given', () => {
+    const table = buildK6TableText(summary, {
+      baselineRunId: 'prev',
+      baselineAt: null,
+      p50: { current: 120, previous: 150, deltaPct: -20, better: true },
+      p95: { current: 190, previous: 170, deltaPct: 11.8, better: false },
+      p99: { current: 240, previous: 240, deltaPct: 0, better: null },
+      rps: { current: 42.5, previous: 40, deltaPct: 6.25, better: true },
+      errorRate: { current: 0.004, previous: 0.002, deltaPct: 100, better: false },
+    })
+    expect(table).toContain('-20.0% better')
+    expect(table).toContain('+11.8% worse')
+  })
+})
+
+describe('buildK6ReplyBlocks', () => {
+  const summary = {
+    p50: 120,
+    p95: 1900,
+    p99: 2100,
+    rps: 42.5,
+    errorRate: 0.042,
+    requests: 5100,
+    checksPassed: 5000,
+    checksTotal: 5100,
+    thresholds: [{ metric: 'http_req_duration', expression: 'p(95)<800', ok: false }],
+  }
+  test('keeps the headline lines, adds a code-block table, and notes the PDF', () => {
+    const blocks = buildK6ReplyBlocks({ summary, comparison: null, hasPdf: true }) as {
+      type: string
+      text?: { text: string }
+      elements?: { text: string }[]
+    }[]
+    const texts = blocks
+      .map((b) => b.text?.text ?? b.elements?.map((e) => e.text).join(''))
+      .join('\n')
+    expect(texts).toContain('p95 1900ms')
+    expect(texts).toContain('Failing threshold: http_req_duration')
+    expect(texts).toContain('```') // fenced table
+    expect(texts).toContain('📎')
+    expect(texts).toContain('No previous run with the same settings')
   })
 })

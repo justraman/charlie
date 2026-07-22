@@ -286,6 +286,9 @@ export const runs = sqliteTable(
     schedule_id: text('schedule_id').references(() => schedules.id),
     // 0006: channel a slash command came from, captured at trigger time.
     slack_channel: text('slack_channel'),
+    // 0008: ts of the Slack "run started" parent message, so terminal reporting
+    // can edit it and post results/artifacts as threaded replies.
+    slack_thread_ts: text('slack_thread_ts'),
     queued_at: text('queued_at').notNull(),
     started_at: text('started_at'),
     finished_at: text('finished_at'),
@@ -358,6 +361,7 @@ export const reports = sqliteTable('reports', {
   load_summary: text('load_summary'), // JSON k6 p50/p95/p99, RPS, error rate, thresholds
   e2e_summary: text('e2e_summary'), // JSON flows passed/failed, first failing step
   html_report_key: text('html_report_key'), // R2 key of rendered HTML report (nullable)
+  pdf_report_key: text('pdf_report_key'), // 0008: R2 key of the generated k6 PDF report (nullable)
   created_at: text('created_at').notNull(),
 })
 

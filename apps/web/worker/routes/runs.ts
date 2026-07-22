@@ -271,6 +271,7 @@ runs.get(
         e2e_summary: reports.e2e_summary,
         load_summary: reports.load_summary,
         html_report_key: reports.html_report_key,
+        pdf_report_key: reports.pdf_report_key,
         created_at: reports.created_at,
       })
       .from(reports)
@@ -299,6 +300,7 @@ runs.get(
             e2eSummary: report.e2e_summary ? JSON.parse(report.e2e_summary) : null,
             loadSummary: report.load_summary ? JSON.parse(report.load_summary) : null,
             htmlReportKey: report.html_report_key,
+            pdfReportKey: report.pdf_report_key,
             createdAt: report.created_at,
           }
         : null,

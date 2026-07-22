@@ -29,6 +29,13 @@
       "when": 1784741211657,
       "tag": "0003_friendly_white_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1784750758100,
+      "tag": "0004_black_thor_girl",
+      "breakpoints": true
     }
   ]
 }

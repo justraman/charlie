@@ -11,6 +11,8 @@ import { environments, projects, reports, run_shards, runs, shard_results } from
 import type { Env } from '../env'
 import { uuidv7 } from '../lib/ids'
 import { slackCredentials } from '../lib/integrations'
+import { compareLoad, findBaselineLoad, type LoadComparison } from '../lib/load-compare'
+import { buildK6ReportPdf } from '../lib/pdf'
 import type {
   FlowResultEntry,
   RunInit,
@@ -19,7 +21,15 @@ import type {
   ShardResultPayload,
   ShardStatus,
 } from '../lib/run-types'
-import { buildResultBlocks, postMessage } from '../lib/slack'
+import {
+  buildE2EReplyBlocks,
+  buildK6ReplyBlocks,
+  buildRunParentBlocks,
+  postMessage,
+  runParentText,
+  updateMessage,
+  uploadFileToThread,
+} from '../lib/slack'
 
 const DEFAULT_DEAD_SHARD_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -113,6 +123,25 @@ interface Meta {
   lastActivityMs: number
 }
 
+/** Denormalized project/environment context for a run, for Slack + PDF. */
+interface RunContext {
+  projectId: string
+  environmentId: string
+  profile: string
+  projectName: string
+  envName: string
+  projectChannel: string | null
+  slackChannel: string | null
+  threadTs: string | null
+}
+
+/** A human-readable label for the run's flow selection. */
+function flowLabel(names: string[]): string {
+  if (names.length === 1) return names[0]!
+  if (names.length <= 3) return names.join(', ')
+  return `${names.length} flows`
+}
+
 export class RunCoordinator extends DurableObject<Env> {
   // SSE subscribers (in-memory; connections don't survive hibernation).
   private sessions = new Set<ReadableStreamDefaultController<Uint8Array>>()
@@ -169,6 +198,13 @@ export class RunCoordinator extends DurableObject<Env> {
     }
     await this.putMeta(meta)
     await this.ctx.storage.setAlarm(Date.now() + this.timeoutMs())
+    // Open the Slack thread with a "Started" message (best-effort, off the
+    // critical path); its ts is persisted for terminal reporting to reply into.
+    this.ctx.waitUntil(
+      this.notifyStarted(meta).catch((err) =>
+        console.error(`[slack] started message failed for run ${meta.runId}:`, err),
+      ),
+    )
     return Response.json({ ok: true })
   }
 
@@ -309,8 +345,18 @@ export class RunCoordinator extends DurableObject<Env> {
     // k6 reports load metrics; Playwright reports a per-flow E2E summary.
     let e2eSummary: Record<string, unknown> | null = null
     let loadSummary: Record<string, unknown> | null = null
+    let pdfReportKey: string | null = null
     if (meta.engine === 'k6') {
       loadSummary = aggregateLoad(rows)
+      if (loadSummary) {
+        // Compare with the last run of the same settings, and render a PDF.
+        // Best-effort: a failure here must not block finalizing the run.
+        try {
+          pdfReportKey = await this.buildK6Artifacts(db, meta, loadSummary, runStatus, nowIso)
+        } catch (err) {
+          console.error(`[report] k6 comparison/pdf failed for run ${meta.runId}:`, err)
+        }
+      }
     } else {
       const flows: FlowResultEntry[] = []
       for (const r of rows) {
@@ -342,6 +388,7 @@ export class RunCoordinator extends DurableObject<Env> {
           totals: JSON.stringify(totals),
           e2e_summary: e2eSummary ? JSON.stringify(e2eSummary) : null,
           load_summary: loadSummary ? JSON.stringify(loadSummary) : null,
+          pdf_report_key: pdfReportKey,
           created_at: nowIso,
         })
         .onConflictDoUpdate({
@@ -351,6 +398,7 @@ export class RunCoordinator extends DurableObject<Env> {
             totals: sql`excluded.totals`,
             e2e_summary: sql`excluded.e2e_summary`,
             load_summary: sql`excluded.load_summary`,
+            pdf_report_key: sql`excluded.pdf_report_key`,
           },
         }),
       db
@@ -395,20 +443,18 @@ export class RunCoordinator extends DurableObject<Env> {
     }
   }
 
-  /**
-   * Post a Block Kit result message to the run's Slack channel (the channel a
-   * slash command came from, else the project's default channel). No-ops cleanly
-   * when Slack isn't connected or no channel applies.
-   */
-  private async notifySlack(meta: Meta, status: RunStatus): Promise<void> {
-    const db = createDb(this.env.DB)
-    const run = await db
+  /** Load denormalized project/environment context for a run (names + Slack). */
+  private async runContext(
+    db: ReturnType<typeof createDb>,
+    runId: string,
+  ): Promise<RunContext | null> {
+    const row = await db
       .select({
-        slack_channel: runs.slack_channel,
-        engine: runs.engine,
+        project_id: runs.project_id,
+        environment_id: runs.environment_id,
         profile: runs.profile,
-        summary: runs.summary,
-        error: runs.error,
+        slack_channel: runs.slack_channel,
+        slack_thread_ts: runs.slack_thread_ts,
         project_name: projects.name,
         project_channel: projects.slack_channel,
         env_name: environments.name,
@@ -416,61 +462,212 @@ export class RunCoordinator extends DurableObject<Env> {
       .from(runs)
       .innerJoin(projects, eq(projects.id, runs.project_id))
       .innerJoin(environments, eq(environments.id, runs.environment_id))
-      .where(eq(runs.id, meta.runId))
+      .where(eq(runs.id, runId))
       .get()
-    if (!run) return
+    if (!row) return null
+    return {
+      projectId: row.project_id,
+      environmentId: row.environment_id,
+      profile: row.profile,
+      projectName: row.project_name,
+      envName: row.env_name,
+      projectChannel: row.project_channel,
+      slackChannel: row.slack_channel,
+      threadTs: row.slack_thread_ts,
+    }
+  }
 
-    const channel = run.slack_channel ?? run.project_channel
+  /**
+   * Post the "⏳ Started …" parent message that opens the run's Slack thread, and
+   * persist its ts so terminal reporting can edit it and reply in-thread. Uses
+   * the slash-command channel if present, else the project's default channel.
+   */
+  private async notifyStarted(meta: Meta): Promise<void> {
+    const creds = slackCredentials(this.env)
+    if (!creds) return
+    const db = createDb(this.env.DB)
+    const ctx = await this.runContext(db, meta.runId)
+    if (!ctx) return
+    const channel = ctx.slackChannel ?? ctx.projectChannel
     if (!channel) return // nothing subscribed to this run
 
-    const creds = slackCredentials(this.env)
-    if (!creds) return // Slack not configured (env)
-
-    let summary: Record<string, unknown> = {}
-    try {
-      summary = run.summary ? (JSON.parse(run.summary) as Record<string, unknown>) : {}
-    } catch {
-      /* ignore malformed */
-    }
-
-    let e2eLine: string | null = null
-    const loadLines: string[] = []
-    if (run.engine === 'k6') {
-      const p95 = summary.p95 as number | null
-      const errorRate = summary.errorRate as number | null
-      if (typeof p95 === 'number') loadLines.push(`p95 ${Math.round(p95)}ms`)
-      if (typeof errorRate === 'number')
-        loadLines.push(`error rate ${(errorRate * 100).toFixed(2)}%`)
-      const thresholds = (summary.thresholds ?? []) as { metric: string; ok: boolean }[]
-      const breached = thresholds.filter((t) => !t.ok).map((t) => t.metric)
-      if (breached.length) loadLines.push(`Failing threshold: ${breached.join(', ')}`)
-    } else {
-      const passed = (summary.flowsPassed as number | undefined) ?? 0
-      const failed = (summary.flowsFailed as number | undefined) ?? 0
-      e2eLine = `${passed}/${passed + failed} flows passed`
-      if (summary.firstFailingFlow) e2eLine += ` · first failure: ${summary.firstFailingFlow}`
-    }
-
-    const blocks = buildResultBlocks({
+    const label = flowLabel(meta.flowSelection.map((f) => f.name))
+    const blocks = buildRunParentBlocks({
+      phase: 'started',
+      flowLabel: label,
+      project: ctx.projectName,
+      environment: ctx.envName,
       runId: meta.runId,
-      project: run.project_name,
-      environment: run.env_name,
-      engine: run.engine,
-      profile: run.profile,
-      status,
       appBaseUrl: this.env.APP_BASE_URL,
-      e2eLine,
-      loadLines,
-      reason: run.error,
     })
-    const icon = status === 'passed' ? '✅' : '❌'
-    await postMessage(
-      creds.botToken,
-      channel,
-      blocks,
-      `${icon} ${run.project_name} · ${run.env_name} — ${status}`,
-      this.env.SLACK_API_BASE,
-    )
+    const text = runParentText({
+      phase: 'started',
+      flowLabel: label,
+      project: ctx.projectName,
+      environment: ctx.envName,
+    })
+    const res = await postMessage(creds.botToken, channel, blocks, text, {
+      apiBase: this.env.SLACK_API_BASE,
+    })
+    // D1 is the source of truth for the thread ts (avoids racing in-memory meta).
+    if (res.ok && typeof res.ts === 'string') {
+      await db.update(runs).set({ slack_thread_ts: res.ts }).where(eq(runs.id, meta.runId))
+    }
+  }
+
+  /**
+   * Compute the same-settings baseline comparison (mutating `loadSummary` to
+   * carry it), render the k6 report to a PDF, and store it in R2. Returns the R2
+   * key of the PDF, or null if context is missing.
+   */
+  private async buildK6Artifacts(
+    db: ReturnType<typeof createDb>,
+    meta: Meta,
+    loadSummary: Record<string, unknown>,
+    runStatus: RunStatus,
+    nowIso: string,
+  ): Promise<string | null> {
+    const ctx = await this.runContext(db, meta.runId)
+    if (!ctx) return null
+    const names = meta.flowSelection.map((f) => f.name)
+    const current = {
+      p50: (loadSummary.p50 ?? null) as number | null,
+      p95: (loadSummary.p95 ?? null) as number | null,
+      p99: (loadSummary.p99 ?? null) as number | null,
+      rps: (loadSummary.rps ?? null) as number | null,
+      errorRate: (loadSummary.errorRate ?? null) as number | null,
+    }
+    const baseline = await findBaselineLoad(db, {
+      runId: meta.runId,
+      projectId: ctx.projectId,
+      environmentId: ctx.environmentId,
+      profile: ctx.profile,
+      flowNames: names,
+    })
+    const comparison: LoadComparison | null = baseline ? compareLoad(current, baseline) : null
+    if (comparison) loadSummary.comparison = comparison
+
+    const pdf = buildK6ReportPdf({
+      runId: meta.runId,
+      project: ctx.projectName,
+      environment: ctx.envName,
+      profile: ctx.profile,
+      status: runStatus,
+      createdAt: nowIso,
+      summary: loadSummary as unknown as Parameters<typeof buildK6ReportPdf>[0]['summary'],
+      comparison,
+    })
+    const key = `runs/${meta.runId}/k6-report.pdf`
+    await this.env.ARTIFACTS.put(key, pdf, { httpMetadata: { contentType: 'application/pdf' } })
+    return key
+  }
+
+  /**
+   * Report a terminal run to Slack: flip the parent "Started" message to
+   * "Completed ✅" / "Failed 🔴", then post the results as a threaded reply — a
+   * metrics table (+ PDF attachment) for k6, or the flows summary for E2E.
+   * No-ops cleanly when Slack isn't connected or no channel applies.
+   */
+  private async notifySlack(meta: Meta, status: RunStatus): Promise<void> {
+    const creds = slackCredentials(this.env)
+    if (!creds) return
+    const db = createDb(this.env.DB)
+    const ctx = await this.runContext(db, meta.runId)
+    if (!ctx) return
+    const channel = ctx.slackChannel ?? ctx.projectChannel
+    if (!channel) return
+    const apiBase = this.env.SLACK_API_BASE
+
+    const report = await db
+      .select({
+        load_summary: reports.load_summary,
+        e2e_summary: reports.e2e_summary,
+        pdf_report_key: reports.pdf_report_key,
+      })
+      .from(reports)
+      .where(eq(reports.run_id, meta.runId))
+      .get()
+
+    // Parent message: edit the started message in place if it exists, else post
+    // a fresh terminal message (cron/merge runs that never opened a thread, or a
+    // started message that failed to post).
+    const phase = status === 'passed' ? 'passed' : 'failed'
+    const label = flowLabel(meta.flowSelection.map((f) => f.name))
+    const parentArgs = {
+      flowLabel: label,
+      project: ctx.projectName,
+      environment: ctx.envName,
+    }
+    const parentBlocks = buildRunParentBlocks({
+      phase,
+      ...parentArgs,
+      runId: meta.runId,
+      appBaseUrl: this.env.APP_BASE_URL,
+    })
+    const parentText = runParentText({ phase, ...parentArgs })
+
+    let threadTs = ctx.threadTs
+    if (threadTs) {
+      await updateMessage(creds.botToken, channel, threadTs, parentBlocks, parentText, apiBase)
+    } else {
+      const res = await postMessage(creds.botToken, channel, parentBlocks, parentText, { apiBase })
+      threadTs = res.ok && typeof res.ts === 'string' ? res.ts : null
+    }
+
+    // Threaded results reply.
+    if (meta.engine === 'k6') {
+      let summary: Record<string, unknown> = {}
+      try {
+        summary = report?.load_summary ? JSON.parse(report.load_summary) : {}
+      } catch {
+        /* ignore malformed */
+      }
+      const comparison = (summary.comparison as LoadComparison | undefined) ?? null
+      const replyBlocks = buildK6ReplyBlocks({
+        summary: summary as unknown as Parameters<typeof buildK6ReplyBlocks>[0]['summary'],
+        comparison,
+        hasPdf: Boolean(report?.pdf_report_key),
+      })
+      await postMessage(creds.botToken, channel, replyBlocks, 'k6 load results', {
+        threadTs,
+        apiBase,
+      })
+      // Attach the PDF into the thread (best-effort).
+      if (report?.pdf_report_key) {
+        try {
+          const obj = await this.env.ARTIFACTS.get(report.pdf_report_key)
+          if (obj) {
+            await uploadFileToThread(
+              creds.botToken,
+              {
+                channel,
+                threadTs,
+                filename: `k6-report-${meta.runId.slice(0, 8)}.pdf`,
+                title: `k6 load report — ${ctx.projectName}@${ctx.envName}`,
+                bytes: new Uint8Array(await obj.arrayBuffer()),
+              },
+              apiBase,
+            )
+          }
+        } catch (err) {
+          console.error(`[slack] pdf upload failed for run ${meta.runId}:`, err)
+        }
+      }
+    } else {
+      let e2e: Record<string, unknown> = {}
+      try {
+        e2e = report?.e2e_summary ? JSON.parse(report.e2e_summary) : {}
+      } catch {
+        /* ignore malformed */
+      }
+      const replyBlocks = buildE2EReplyBlocks({
+        flowsPassed: (e2e.flowsPassed as number | undefined) ?? 0,
+        flowsFailed: (e2e.flowsFailed as number | undefined) ?? 0,
+        firstFailingFlow: (e2e.firstFailingFlow as string | undefined) ?? null,
+        firstFailingStep: (e2e.firstFailingStep as number | undefined) ?? null,
+      })
+      await postMessage(creds.botToken, channel, replyBlocks, 'E2E results', { threadTs, apiBase })
+    }
   }
 
   private async snapshot(): Promise<RunSnapshot | { runId: null }> {
