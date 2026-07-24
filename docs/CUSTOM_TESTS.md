@@ -12,6 +12,20 @@ same run.
 A ready-to-copy template lives in
 [`examples/playwright-custom-tests`](../examples/playwright-custom-tests).
 
+## Write tests with AI (the `charlie-playwright` skill)
+
+Charlie ships a [Claude Code skill](../skills/charlie-playwright) that teaches
+the model this contract — the env vars, secret handling, grep tagging, and the
+import steps — so the Playwright it writes runs here unchanged. Install it into
+your own test repo (it's surfaced in the UI on the **Custom Playwright code**
+flow form too):
+
+```bash
+npx skills add justraman/charlie --skill charlie-playwright
+```
+
+Then ask Claude to "write a Charlie-compatible Playwright test" in that repo.
+
 ## The two flow kinds
 
 | | `steps` flow | `code` flow |

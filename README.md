@@ -164,7 +164,7 @@ Phase 7 — AI-assisted flow generation:
 
 - A flow can be a **`code`** flow — a pointer (`flow_versions.code_spec`) to a GitHub repo of real Playwright tests — alongside the existing `steps` flows (`flows.kind`, migration `0003`).
 - On a run, the runner clones the repo (with a short-lived, run-scoped GitHub App clone token minted into the bundle), installs its dependencies (package manager auto-detected from the lockfile), and runs `playwright test`, injecting the environment as `CHARLIE_BASE_URL` / `CHARLIE_HEADERS` / `CHARLIE_SECRET_*`. Pass/fail comes from Playwright's JSON report; the report and traces upload to R2 via the same shard-result pipeline as step flows.
-- A worked template ships in [`examples/playwright-custom-tests`](examples/playwright-custom-tests); the contract is documented in [docs/CUSTOM_TESTS.md](docs/CUSTOM_TESTS.md).
+- A worked template ships in [`examples/playwright-custom-tests`](examples/playwright-custom-tests); the contract is documented in [docs/CUSTOM_TESTS.md](docs/CUSTOM_TESTS.md). A [`charlie-playwright` Claude Code skill](skills/charlie-playwright) (`npx skills add justraman/charlie --skill charlie-playwright`, also surfaced in the flow-creation UI) teaches the model the env contract so AI-written tests run here unchanged.
 
 See [EXECUTION_PLAN.md](EXECUTION_PLAN.md) for what's next (Phase 8: reporting depth, hardening & open-source release).
 

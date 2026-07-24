@@ -1,4 +1,4 @@
-import { AlertCircleIcon, ArrowLeftIcon } from 'lucide-react'
+import { AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, SparklesIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { PageHeader } from '@/components/page-header'
@@ -37,6 +37,11 @@ const EMPTY_CODE: CodeFields = { repo: '', ref: '', workingDir: '', testFilter: 
 const PROFILE_NONE = '__none__'
 const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
 
+// Installs the `charlie-playwright` Claude skill into the user's own test repo
+// (see skills/charlie-playwright). It teaches Claude Code to write Playwright
+// tests wired to Charlie's env contract, then import them here as a code flow.
+const SKILL_INSTALL_CMD = 'npx skills add justraman/charlie --skill charlie-playwright'
+
 export function FlowEditorView() {
   const params = useParams<{ projectId?: string; id?: string }>()
   const navigate = useNavigate()
@@ -57,6 +62,18 @@ export function FlowEditorView() {
   const [error, setError] = useState<string | null>(null)
   const [details, setDetails] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  async function copyInstallCmd() {
+    try {
+      await navigator.clipboard.writeText(SKILL_INSTALL_CMD)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard blocked (e.g. non-secure context) — the command stays
+      // visible for a manual copy.
+    }
+  }
 
   useEffect(() => {
     if (!isEdit) {
@@ -333,6 +350,33 @@ export function FlowEditorView() {
               <code>process.env.CHARLIE_BASE_URL</code>; secrets arrive as{' '}
               <code>CHARLIE_SECRET_&lt;NAME&gt;</code>. See the example repo in the docs.
             </p>
+
+            <div className="bg-muted/40 space-y-2 rounded-lg border p-3">
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <SparklesIcon className="size-4" />
+                Write these tests with AI
+              </p>
+              <p className="text-muted-foreground text-sm">
+                Add the <code>charlie-playwright</code> skill to Claude Code in your test repo. It
+                teaches Claude the env contract, secret handling, and grep tagging so the tests it
+                writes run here unchanged.
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="bg-background min-w-0 flex-1 overflow-x-auto rounded-md border px-3 py-2 font-mono text-xs whitespace-nowrap">
+                  {SKILL_INSTALL_CMD}
+                </code>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={copyInstallCmd}
+                  aria-label="Copy install command"
+                >
+                  {copied ? <CheckIcon /> : <CopyIcon />}
+                  {copied ? 'Copied' : 'Copy'}
+                </Button>
+              </div>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="code-repo">Repository (owner/repo)</Label>
               <Input

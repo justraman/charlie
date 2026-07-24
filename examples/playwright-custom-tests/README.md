@@ -9,6 +9,13 @@ step-based flows.
 Use this as a template: copy it into its own GitHub repo (or a subfolder of an
 existing one), install the Charlie GitHub App on it, and import it in Charlie.
 
+> **Tip:** add the `charlie-playwright` Claude Code skill to your repo and let
+> the model write these tests for you — it knows the env contract and import flow:
+>
+> ```bash
+> npx skills add justraman/charlie --skill charlie-playwright
+> ```
+
 ## Layout
 
 ```
