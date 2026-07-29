@@ -148,6 +148,8 @@ export interface RunParentInput {
   environment: string
   runId: string
   appBaseUrl: string
+  /** Set on terminal phases when the run has an HTML (monocart) report. */
+  reportUrl?: string | null
 }
 
 /** The one-line title of a run's parent thread message, per phase. Hourglass
@@ -188,10 +190,21 @@ export function buildRunParentBlocks(input: RunParentInput): unknown[] {
       : [
           {
             type: 'button',
-            text: { type: 'plain_text', text: 'View report' },
+            text: { type: 'plain_text', text: 'View run' },
             url: runUrl,
             action_id: 'charlie_view_report',
           },
+          // Deep link into the visual (monocart) HTML report when one exists.
+          ...(input.reportUrl
+            ? [
+                {
+                  type: 'button',
+                  text: { type: 'plain_text', text: 'View report' },
+                  url: input.reportUrl,
+                  action_id: 'charlie_html_report',
+                },
+              ]
+            : []),
           {
             type: 'button',
             text: { type: 'plain_text', text: 'Re-run' },

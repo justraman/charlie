@@ -13,6 +13,7 @@ import { uuidv7 } from '../lib/ids'
 import { slackCredentials } from '../lib/integrations'
 import { compareLoad, findBaselineLoad, type LoadComparison } from '../lib/load-compare'
 import { buildK6ReportPdf } from '../lib/pdf'
+import { buildReportIndexHtml, findHtmlReportKeys, reportIndexKey } from '../lib/report'
 import type {
   FlowResultEntry,
   RunInit,
@@ -329,9 +330,14 @@ export class RunCoordinator extends DurableObject<Env> {
     const runStatus: RunStatus = failedShards === 0 ? 'passed' : 'failed'
 
     const db = createDb(this.env.DB)
-    // Pull both the per-flow results (E2E) and metrics (k6) from every shard.
+    // Pull the per-flow results (E2E), metrics (k6), and artifact keys (to
+    // locate uploaded monocart HTML reports) from every shard.
     const rows = await db
-      .select({ flow_results: shard_results.flow_results, metrics: shard_results.metrics })
+      .select({
+        flow_results: shard_results.flow_results,
+        metrics: shard_results.metrics,
+        artifact_keys: shard_results.artifact_keys,
+      })
       .from(shard_results)
       .where(eq(shard_results.run_id, meta.runId))
 
@@ -346,6 +352,7 @@ export class RunCoordinator extends DurableObject<Env> {
     let e2eSummary: Record<string, unknown> | null = null
     let loadSummary: Record<string, unknown> | null = null
     let pdfReportKey: string | null = null
+    let htmlReportKey: string | null = null
     if (meta.engine === 'k6') {
       loadSummary = aggregateLoad(rows)
       if (loadSummary) {
@@ -374,6 +381,24 @@ export class RunCoordinator extends DurableObject<Env> {
         firstFailingFlow: firstFailing?.flow ?? null,
         firstFailingStep: firstFailing?.failedStep ?? null,
       }
+
+      // Monocart HTML report(s) uploaded by the runner: one report → link it
+      // directly; several (multi code-flow runs) → write an index page to R2.
+      // Best-effort: a failure here must not block finalizing the run.
+      try {
+        const reportKeys = findHtmlReportKeys(rows.map((r) => r.artifact_keys))
+        if (reportKeys.length === 1) {
+          htmlReportKey = reportKeys[0]!
+        } else if (reportKeys.length > 1) {
+          const indexKey = reportIndexKey(meta.runId)
+          await this.env.ARTIFACTS.put(indexKey, buildReportIndexHtml(meta.runId, reportKeys), {
+            httpMetadata: { contentType: 'text/html; charset=utf-8' },
+          })
+          htmlReportKey = indexKey
+        }
+      } catch (err) {
+        console.error(`[report] html report index failed for run ${meta.runId}:`, err)
+      }
     }
 
     const denormalized = { ...totals, ...(loadSummary ?? e2eSummary ?? {}) }
@@ -389,6 +414,7 @@ export class RunCoordinator extends DurableObject<Env> {
           e2e_summary: e2eSummary ? JSON.stringify(e2eSummary) : null,
           load_summary: loadSummary ? JSON.stringify(loadSummary) : null,
           pdf_report_key: pdfReportKey,
+          html_report_key: htmlReportKey,
           created_at: nowIso,
         })
         .onConflictDoUpdate({
@@ -399,6 +425,7 @@ export class RunCoordinator extends DurableObject<Env> {
             e2e_summary: sql`excluded.e2e_summary`,
             load_summary: sql`excluded.load_summary`,
             pdf_report_key: sql`excluded.pdf_report_key`,
+            html_report_key: sql`excluded.html_report_key`,
           },
         }),
       db
@@ -583,6 +610,7 @@ export class RunCoordinator extends DurableObject<Env> {
         load_summary: reports.load_summary,
         e2e_summary: reports.e2e_summary,
         pdf_report_key: reports.pdf_report_key,
+        html_report_key: reports.html_report_key,
       })
       .from(reports)
       .where(eq(reports.run_id, meta.runId))
@@ -598,11 +626,17 @@ export class RunCoordinator extends DurableObject<Env> {
       project: ctx.projectName,
       environment: ctx.envName,
     }
+    // Link straight to the visual HTML report when the run produced one
+    // (served by GET /api/runs/:id/report; requires a signed-in session).
+    const reportUrl = report?.html_report_key
+      ? `${this.env.APP_BASE_URL.replace(/\/$/, '')}/api/runs/${meta.runId}/report`
+      : null
     const parentBlocks = buildRunParentBlocks({
       phase,
       ...parentArgs,
       runId: meta.runId,
       appBaseUrl: this.env.APP_BASE_URL,
+      reportUrl,
     })
     const parentText = runParentText({ phase, ...parentArgs })
 

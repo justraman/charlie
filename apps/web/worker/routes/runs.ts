@@ -7,6 +7,7 @@ import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
 import { githubConfigured } from '../lib/github'
 import { clientIp, HttpError, userAgent } from '../lib/http'
+import { runRelativePath } from '../lib/report'
 import { createRun } from '../lib/run-create'
 import { callRunDO } from '../lib/run-do'
 import { parseBody } from '../lib/validate'
@@ -337,6 +338,54 @@ runs.get(
     }
     const obj = await c.env.ARTIFACTS.get(key)
     if (!obj) throw new HttpError('not_found', 'Artifact not found')
+    return new Response(obj.body, {
+      headers: {
+        'content-type': obj.httpMetadata?.contentType ?? 'application/octet-stream',
+        'cache-control': 'private, max-age=300',
+      },
+    })
+  },
+)
+
+// --- GET /api/runs/:id/report — the run's HTML (monocart) report -------------
+// Redirects to the canonical /report/<path> URL so the report's relative asset
+// links resolve within the same path space (served by the wildcard below).
+runs.get(
+  '/:id/report',
+  authenticate,
+  authorize({ capability: 'projects.view', scope: 'reports:read' }),
+  async (c) => {
+    const { orgId } = c.get('auth')
+    const db = createDb(c.env.DB)
+    const run = await loadRun(db, orgId, c.req.param('id'))
+    const report = await db
+      .select({ html_report_key: reports.html_report_key })
+      .from(reports)
+      .where(eq(reports.run_id, run.id))
+      .get()
+    const rel = report?.html_report_key ? runRelativePath(run.id, report.html_report_key) : null
+    if (!rel) throw new HttpError('not_found', 'No HTML report for this run')
+    return c.redirect(`/api/runs/${run.id}/report/${rel}`, 302)
+  },
+)
+
+// --- GET /api/runs/:id/report/* — serve report files by path -----------------
+// Maps the sub-path onto the run's R2 prefix (runs/{id}/<path>) so report.html
+// and the assets/attachments monocart wrote next to it resolve relatively.
+runs.get(
+  '/:id/report/*',
+  authenticate,
+  authorize({ capability: 'projects.view', scope: 'reports:read' }),
+  async (c) => {
+    const { orgId } = c.get('auth')
+    const db = createDb(c.env.DB)
+    const run = await loadRun(db, orgId, c.req.param('id'))
+    const marker = '/report/'
+    const idx = c.req.path.indexOf(marker)
+    const rel = decodeURIComponent(c.req.path.slice(idx + marker.length))
+    if (!rel || rel.includes('..')) throw new HttpError('bad_request', 'invalid report path')
+    const obj = await c.env.ARTIFACTS.get(`runs/${run.id}/${rel}`)
+    if (!obj) throw new HttpError('not_found', 'Report file not found')
     return new Response(obj.body, {
       headers: {
         'content-type': obj.httpMetadata?.contentType ?? 'application/octet-stream',

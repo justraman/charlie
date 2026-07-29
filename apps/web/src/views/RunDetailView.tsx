@@ -1,4 +1,4 @@
-import { AlertCircleIcon, ArrowLeftIcon, DownloadIcon } from 'lucide-react'
+import { AlertCircleIcon, ArrowLeftIcon, DownloadIcon, ExternalLinkIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
@@ -44,6 +44,7 @@ interface RunDetail {
     e2eSummary: Record<string, unknown> | null
     loadSummary: LoadSummary | null
     pdfReportKey?: string | null
+    htmlReportKey?: string | null
   } | null
 }
 
@@ -427,6 +428,14 @@ export function RunDetailView() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
             <CardTitle>Report</CardTitle>
+            {detail.report.htmlReportKey && (
+              <Button asChild variant="outline" size="sm">
+                <a href={`/api/runs/${detail.run.id}/report`} target="_blank" rel="noreferrer">
+                  <ExternalLinkIcon />
+                  View report
+                </a>
+              </Button>
+            )}
             {detail.report.pdfReportKey && (
               <Button asChild variant="outline" size="sm">
                 <a

@@ -129,7 +129,7 @@ describe('buildRunParentBlocks', () => {
     expect(actions.elements?.[0]?.text?.text).toBe('Track progress')
     expect(actions.elements?.[0]?.url).toBe('https://c.example.com/runs/run1')
   })
-  test('terminal shows View report + Re-run', () => {
+  test('terminal shows View run + Re-run', () => {
     const blocks = buildRunParentBlocks({ ...base, phase: 'failed' }) as {
       type: string
       elements?: { action_id?: string }[]
@@ -139,6 +139,25 @@ describe('buildRunParentBlocks', () => {
       'charlie_view_report',
       'charlie_rerun',
     ])
+  })
+  test('terminal with reportUrl adds an HTML report button', () => {
+    const blocks = buildRunParentBlocks({
+      ...base,
+      phase: 'passed',
+      reportUrl: 'https://c.example.com/api/runs/run1/report',
+    }) as {
+      type: string
+      elements?: { text?: { text: string }; url?: string; action_id?: string }[]
+    }[]
+    const actions = blocks.find((b) => b.type === 'actions')!
+    expect(actions.elements?.map((e) => e.action_id)).toEqual([
+      'charlie_view_report',
+      'charlie_html_report',
+      'charlie_rerun',
+    ])
+    const reportBtn = actions.elements?.find((e) => e.action_id === 'charlie_html_report')
+    expect(reportBtn?.url).toBe('https://c.example.com/api/runs/run1/report')
+    expect(reportBtn?.text?.text).toBe('View report')
   })
 })
 
