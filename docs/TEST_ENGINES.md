@@ -144,7 +144,7 @@ Profiles are defaults; a flow's `loadProfile` can override stages/thresholds.
 
 ## Recorder (later phase)
 
-A browser-extension recorder (mirroring the reference project) captures clicks/inputs/navigations into `CapturedStep`s and posts them to Charlie to seed a flow. This is complementary to AI flow-gen: the recorder captures *what a human did*, the AI drafts *what should be tested* from source. Both produce the same flow JSON.
+A browser-extension recorder (mirroring the reference project) captures clicks/inputs/navigations into `CapturedStep`s and posts them to Charlie to seed a flow. It produces the same flow JSON as the editor and the import format — see [FLOW_IMPORT_EXPORT.md](FLOW_IMPORT_EXPORT.md).
 
 ## Pass/fail semantics
 

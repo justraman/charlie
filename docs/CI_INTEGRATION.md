@@ -8,7 +8,7 @@ Charlie uses one **GitHub App** (not a personal token) for three jobs:
 
 1. **Dispatch** the reusable workflow into Charlie's runner repo.
 2. **Receive webhooks** (`push`, `pull_request`) from watched source repos for on-merge triggers.
-3. **Read source** (contents, read-only) for AI flow generation.
+3. **Read source** (contents, read-only) to clone the Playwright repos behind `code` flows.
 
 The App's private key lives in Workers Secrets (`CHARLIE_GH_APP_KEY`). Per-installation tokens are minted on demand (JWT signed with the key → installation access token) and cached until just before expiry. The webhook secret verifies inbound `X-Hub-Signature-256`.
 

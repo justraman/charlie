@@ -32,7 +32,7 @@ Four roles, checked in the protected-route middleware against a static capabilit
 | Create/edit flows, environments | | ✓ | ✓ | ✓ |
 | Manage schedules | | ✓ | ✓ | ✓ |
 | Manage secrets | | | ✓ | ✓ |
-| Manage integrations (Slack/GitHub/AI) | | | ✓ | ✓ |
+| Manage integrations (Slack/GitHub) | | | ✓ | ✓ |
 | Manage members & roles | | | ✓ | ✓ |
 | Manage API keys | | | ✓ | ✓ |
 | Transfer ownership, delete org data | | | | ✓ |
@@ -76,6 +76,6 @@ The log is append-only (no update/delete paths in the API) and browsable per-ent
 ## Threat-model notes
 
 - **Least privilege on the compute plane:** run tokens, not org keys, cross into GitHub Actions.
-- **Secrets never round-trip:** environment secrets and AI keys are write-only from the client's perspective; the API returns presence/masked hints, never plaintext.
+- **Secrets never round-trip:** environment secrets are write-only from the client's perspective; the API returns presence/masked hints, never plaintext. Exported flow documents carry only `{{secrets.NAME}}` references, never values.
 - **Domain-gated SSO:** self-host single-org means the allow-list is the primary tenancy boundary.
 - **Immutable audit:** compromise of an editor account is detectable and attributable.

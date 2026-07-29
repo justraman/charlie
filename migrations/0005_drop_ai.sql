@@ -1,10 +1,18 @@
+-- Hand-edited after `drizzle-kit generate`, in two places:
+--   1. The UPDATE below, which drizzle cannot know to emit.
+--   2. `PRAGMA foreign_keys` → `PRAGMA defer_foreign_keys`. D1 runs a migration
+--      inside a transaction, where `foreign_keys` is a no-op, so the generated
+--      form fails the flows rebuild with SQLITE_CONSTRAINT_FOREIGNKEY
+--      (flow_versions references flows). `defer_foreign_keys` does work inside a
+--      transaction: checks are deferred to commit, by which point the renamed
+--      table satisfies them. Apply the same fix to any future table rebuild.
 DROP TABLE `flow_drafts`;--> statement-breakpoint
 DROP TABLE `ai_analyses`;--> statement-breakpoint
 -- Flows approved from an AI draft were authored (and owned) by the human who
 -- approved them, so they land as 'manual'. This must run BEFORE the rebuild
 -- below, whose CHECK no longer admits 'ai'.
 UPDATE `flows` SET `origin` = 'manual' WHERE `origin` = 'ai';--> statement-breakpoint
-PRAGMA foreign_keys=OFF;--> statement-breakpoint
+PRAGMA defer_foreign_keys=ON;--> statement-breakpoint
 CREATE TABLE `__new_flows` (
 	`id` text PRIMARY KEY NOT NULL,
 	`project_id` text NOT NULL,
@@ -26,6 +34,6 @@ CREATE TABLE `__new_flows` (
 INSERT INTO `__new_flows`("id", "project_id", "name", "description", "current_version_id", "kind", "engines", "origin", "created_by", "created_at", "updated_at", "deleted_at") SELECT "id", "project_id", "name", "description", "current_version_id", "kind", "engines", "origin", "created_by", "created_at", "updated_at", "deleted_at" FROM `flows`;--> statement-breakpoint
 DROP TABLE `flows`;--> statement-breakpoint
 ALTER TABLE `__new_flows` RENAME TO `flows`;--> statement-breakpoint
-PRAGMA foreign_keys=ON;--> statement-breakpoint
+PRAGMA defer_foreign_keys=OFF;--> statement-breakpoint
 CREATE UNIQUE INDEX `idx_flows_name` ON `flows` (`project_id`,`name`) WHERE "flows"."deleted_at" is null;--> statement-breakpoint
 CREATE INDEX `idx_flows_project` ON `flows` (`project_id`);

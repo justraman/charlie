@@ -167,24 +167,26 @@ Estimates assume a small team (1–2 engineers). They are planning aids, not com
 
 ---
 
-## Phase 7 — AI-assisted flow generation
+## Phase 7 — Flow import & export
 
-**Goal:** draft flows from source code via a pluggable provider.
+**Goal:** flows are a portable JSON document, so they can be authored anywhere, reviewed in a pull request, and moved between projects and instances.
+
+> Supersedes the original Phase 7 (AI-assisted flow generation from source). Charlie no longer calls any model or reads any source: teams that want a model to draft a flow do it in their own harness with their own key and upload the result. That keeps provider keys, spend, and code-out-to-a-third-party entirely on the team's side of the line, and leaves Charlie with one job it can do rigorously — validating and running the document. The `ai_providers` / `ai_analyses` / `flow_drafts` tables and the `ai-analyze` workflow were removed in migration `0005`.
 
 **Tasks**
-- `ai_providers` config + Settings UI (provider, model, encrypted key); default provider.
-- `AiProvider` interface + adapters: Anthropic, OpenAI, Workers AI.
-- `ai-analyze` GitHub workflow: checkout source (App `contents: read`), static surface extraction (routes/forms/test-ids/framework), targeted excerpts.
-- Structured-output contract: model returns schema-valid `FlowStep[]`; validate + reject/retry; store as `origin = ai`, `status = draft`.
-- Draft ingest endpoint (run-token) + `flow-drafts` list + approve→v1 (human-authored) flow.
-- SPA: "Suggested flows" review UI with source references and reasoning; edit-then-approve.
+- `charlie.flows/v1` document schema in `flow-core` (`portable.ts`): strict Zod, `useFlow` by **name** rather than id, cross-flow checks (duplicate names, self-reference, code-flow reference, cycles), topological import order.
+- Export: whole project or a single flow with its `useFlow` dependencies pulled in; `content-disposition` download, pretty-printed, no secret values.
+- Import: `create` / `upsert` modes, dry-run planning, resolution against the target project's flows, cycle check over the post-import reference graph, one atomic D1 batch, `origin = import` + per-flow audit rows.
+- SPA: **Export all** / per-flow export, and an **Import JSON** dialog that previews the plan (creates, new versions, expected `{{secrets.*}}`) before writing.
+- A `charlie-flow-json` skill teaching an external agent the document format.
 
-**Deliverables:** on-demand AI flow drafting, review/approve workflow, provider config.
+**Deliverables:** lossless round-trip of flow definitions, and a validated upload path for externally-authored flows.
 
 **Acceptance**
-- Point a project at a sample repo → analysis produces at least valid, editable draft flows referencing real routes/forms.
-- No secret values are sent to the provider; drafts use `{{secrets.*}}` placeholders.
-- A draft cannot be scheduled/run until an `editor` approves it; approval is audited with AI origin recorded.
+- Export a project, import it into an empty project → identical flows, with `useFlow` composition intact.
+- A malformed upload is rejected with one `details` entry per problem, each carrying a JSON path; nothing is written.
+- A name clash fails under `create` and produces a new version under `upsert`; an import that would close a `useFlow` cycle is refused.
+- Imported flows are attributable: `origin = import` plus an audit row naming the uploader.
 
 ---
 
@@ -222,9 +224,9 @@ Estimates assume a small team (1–2 engineers). They are planning aids, not com
 ## Sequencing rationale
 
 1. **Auth before features** (Phase 1) — everything is scoped and audited; retrofitting is painful.
-2. **The handshake before breadth** (Phase 3) — the Cloudflare↔GitHub round-trip is the riskiest unknown; prove it with Playwright before adding k6, schedules, Slack, or AI.
+2. **The handshake before breadth** (Phase 3) — the Cloudflare↔GitHub round-trip is the riskiest unknown; prove it with Playwright before adding k6, schedules, or Slack.
 3. **k6 reuses the handshake** (Phase 4) — only the engine differs; dispatch, callbacks, DO, and reports are already built.
-4. **Triggers, then Slack, then AI** (5→6→7) — each is additive on top of a working run pipeline and independently shippable.
+4. **Triggers, then Slack, then import/export** (5→6→7) — each is additive on top of a working run pipeline and independently shippable.
 5. **Hardening last** (Phase 8) — once the surface is complete, make it production- and community-ready.
 
 ---
@@ -238,12 +240,11 @@ These were decided to keep the plan concrete; each is cheap to revisit:
 - **Runtime/tooling:** Bun for install/runtime and the runner CLI; Nx (integrated — single root `package.json`, projects via `project.json`) orchestrates and caches `typecheck`/`test`/`build`; Wrangler for the Worker; Biome for lint/format. Cross-package imports resolve from source via TS path mappings + a wrangler/esbuild alias.
 - **Artifact retention:** R2 objects expire after 30 days by default (configurable); D1 reports kept indefinitely.
 - **Run token TTL:** expires on terminal status or after 6 hours, whichever first.
-- **Default AI provider:** none preconfigured; an admin must add a key before AI features unlock.
+- **No model calls from Charlie:** flow authoring assistance is the user's own tooling; Charlie's contract is the JSON document it validates.
 
 ## Open questions to resolve before/at each phase
 
 - **GitHub Actions cost ceiling** — expected concurrent runs and VU counts drive the concurrency caps in Phase 8 (and whether self-hosted runners get pulled earlier). Rough numbers would help size defaults.
 - **Slack app scope** — single workspace is assumed (self-host single-org). Confirm no need for multi-workspace.
-- **Recorder extension** — the reference project has a browser recorder for capturing flows. Is that in scope for v1, or is AI-drafting + manual authoring enough to start? (Currently deferred; easy to slot after Phase 7.)
-- **Data residency** — any requirement to keep source code out of third-party LLMs? If so, default the AI provider to Workers AI.
+- **Recorder extension** — the reference project has a browser recorder for capturing flows. Is that in scope for v1, or are the editor plus JSON import enough to start? (Currently deferred; it would emit the same document format.)
 - **Prod-environment guardrails** — should running load against a `prod` environment require an extra confirmation or a dedicated role? (Recommended; not yet specced.)

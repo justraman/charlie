@@ -68,7 +68,7 @@ A GitHub App (installed on the org and on watched source repos) provides:
 
 - **Workflow dispatch** into the runner repo (installation token, minted per dispatch).
 - **Merge webhooks** — `push` / `pull_request.closed(merged)` events from watched repos hit `/webhooks/github`, triggering on-merge runs.
-- **Source access** — read-only repo contents for the AI flow-generation job.
+- **Source access** — read-only repo contents, used to clone the Playwright projects behind `code` flows.
 
 See [docs/CI_INTEGRATION.md](docs/CI_INTEGRATION.md).
 

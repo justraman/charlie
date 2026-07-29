@@ -30,7 +30,7 @@ Then ask Claude to "write a Charlie-compatible Playwright test" in that repo.
 
 | | `steps` flow | `code` flow |
 |---|---|---|
-| Authored as | JSON steps (dashboard editor / AI / recorder) | Playwright `*.spec.ts` in a repo |
+| Authored as | JSON steps (dashboard editor, or an uploaded flow document) | Playwright `*.spec.ts` in a repo |
 | Engines | Playwright **and** k6 (one definition, two modes) | Playwright only |
 | Stored in | `flow_versions.steps` | `flow_versions.code_spec` |
 | Runs by | flow-core step executor | cloning the repo + `playwright test` |
@@ -118,7 +118,7 @@ run silently selects only k6-capable step flows.
 ## Requirements & tips
 
 - **Install the Charlie GitHub App on the test repo** so the control plane can
-  mint a clone token for it (same App used for on-merge triggers and AI analysis).
+  mint a clone token for it (the same App used for on-merge triggers).
   A public repo clones without a token.
 - **Commit a lockfile** for reproducible, faster installs.
 - **Tag tests** (`@smoke`, `@login`, …) so a code flow's `grep` can target them.

@@ -6,7 +6,14 @@
 // writing anything. The user confirms that plan before it lands, so an import
 // is never a surprise.
 
-import { AlertCircleIcon, CheckCircle2Icon, UploadIcon } from 'lucide-react'
+import {
+  AlertCircleIcon,
+  CheckCircle2Icon,
+  CheckIcon,
+  CopyIcon,
+  SparklesIcon,
+  UploadIcon,
+} from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -41,6 +48,10 @@ import { ApiError, api } from '@/lib/api'
 
 type Mode = 'create' | 'upsert'
 
+// Installs the `charlie-flow-json` skill (see skills/charlie-flow-json) into the
+// user's own repo, so their agent writes documents this endpoint accepts.
+const SKILL_INSTALL_CMD = 'npx skills add justraman/charlie --skill charlie-flow-json'
+
 interface PlannedFlow {
   id: string
   name: string
@@ -73,6 +84,18 @@ export function FlowImportDialog({
   const [error, setError] = useState<string | null>(null)
   const [details, setDetails] = useState<unknown>(null)
   const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  async function copyInstallCmd() {
+    try {
+      await navigator.clipboard.writeText(SKILL_INSTALL_CMD)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard blocked (e.g. non-secure context) — the command stays visible
+      // for a manual copy.
+    }
+  }
 
   function reset() {
     setFileName(null)
@@ -180,6 +203,33 @@ export function FlowImportDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="bg-muted/40 space-y-2 rounded-lg border p-3">
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <SparklesIcon className="size-4" />
+              Generate the file with your own AI assistant
+            </p>
+            <p className="text-muted-foreground text-sm">
+              Add the <code>charlie-flow-json</code> skill to Claude Code or Codex in your own repo.
+              It teaches the document format — actions, selectors, secret placeholders, composition
+              — so the JSON it writes imports here unchanged.
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="bg-background min-w-0 flex-1 overflow-x-auto rounded-md border px-3 py-2 font-mono text-xs whitespace-nowrap">
+                {SKILL_INSTALL_CMD}
+              </code>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={copyInstallCmd}
+                aria-label="Copy install command"
+              >
+                {copied ? <CheckIcon /> : <CopyIcon />}
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
+            </div>
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="flow-doc">Flow document (.json)</Label>
             <input

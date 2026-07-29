@@ -6,7 +6,7 @@ flow**.
 ## 1. Install the Charlie GitHub App on the repo
 
 Charlie clones the repo with a short-lived, run-scoped token minted by its
-GitHub App (the same App used for on-merge triggers and AI analysis). Install it
+GitHub App (the same App used for on-merge triggers). Install it
 on the repo (or org) that holds your tests. A **public** repo clones without a
 token, but private repos require the App.
 

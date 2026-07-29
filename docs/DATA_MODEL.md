@@ -22,7 +22,6 @@ organization
                           └── reports
   └── api_keys
   └── integrations (slack_install, github_install)
-  └── ai_providers
   └── audit_log
 ```
 
@@ -36,7 +35,6 @@ Single row in v1 (self-host, single org). Holds global settings.
 | id | TEXT PK | |
 | name | TEXT | |
 | allowed_email_domains | TEXT (JSON array) | Google SSO allow-list, e.g. `["example.com"]` |
-| default_ai_provider_id | TEXT FK → ai_providers | nullable |
 | settings | TEXT (JSON) | misc org settings |
 | created_at / updated_at | TEXT | |
 
@@ -70,7 +68,7 @@ Single row in v1 (self-host, single org). Holds global settings.
 | name | TEXT | |
 | slug | TEXT UNIQUE | used in Slack commands and URLs |
 | description | TEXT | |
-| source_repo | TEXT | `owner/repo` for AI flow-gen and on-merge triggers (nullable) |
+| source_repo | TEXT | `owner/repo` watched for on-merge triggers (nullable) |
 | default_environment_id | TEXT FK → environments | nullable |
 | created_by | TEXT FK → users | |
 | created_at / updated_at / deleted_at | TEXT | |
@@ -100,7 +98,7 @@ The current pointer for a named flow; the body lives in `flow_versions`.
 | description | TEXT | |
 | current_version_id | TEXT FK → flow_versions | |
 | engines | TEXT (JSON array) | which engines this flow supports: `["playwright","k6"]` |
-| origin | TEXT | `manual` \| `recorder` \| `ai` |
+| origin | TEXT | `manual` \| `recorder` \| `import` (uploaded as a flow document) |
 | created_by | TEXT FK → users | |
 | created_at / updated_at / deleted_at | TEXT | |
 
@@ -222,20 +220,6 @@ Rows for Slack and GitHub installs.
 | kind | TEXT | `slack` \| `github` |
 | external_id | TEXT | Slack team id / GitHub installation id |
 | config_ciphertext | TEXT | tokens/signing secrets encrypted at rest |
-| created_by | TEXT FK → users | |
-| created_at / updated_at | TEXT | |
-
-### ai_providers
-Pluggable AI config (bring your own key).
-
-| column | type | notes |
-|---|---|---|
-| id | TEXT PK | |
-| org_id | TEXT FK | |
-| provider | TEXT | `anthropic` \| `openai` \| `workers_ai` |
-| model | TEXT | e.g. `claude-sonnet-...`, `gpt-...` |
-| api_key_ciphertext | TEXT | encrypted; `workers_ai` needs none |
-| enabled | INTEGER (bool) | |
 | created_by | TEXT FK → users | |
 | created_at / updated_at | TEXT | |
 

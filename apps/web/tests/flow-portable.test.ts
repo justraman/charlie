@@ -9,8 +9,8 @@ import {
   buildFlowDocument,
   documentFilename,
   type ImportMode,
-  planFlowImport,
   type ProjectFlow,
+  planFlowImport,
   withDependencies,
 } from '../worker/lib/flow-portable'
 import { HttpError } from '../worker/lib/http'
@@ -66,7 +66,10 @@ describe('export', () => {
     expect(d.project).toBe('storefront')
     expect(d.flows[0]).toMatchObject({
       name: 'checkout',
-      steps: [{ action: 'useFlow', flow: 'login' }, { action: 'goto', url: '/cart' }],
+      steps: [
+        { action: 'useFlow', flow: 'login' },
+        { action: 'goto', url: '/cart' },
+      ],
     })
   })
 
@@ -130,7 +133,9 @@ describe('planFlowImport — creating', () => {
   })
 
   test('resolves a useFlow reference to a flow created in the same import', () => {
-    const p = plan(doc({ name: 'checkout', steps: [{ action: 'useFlow', flow: 'login' }] }, loginDoc))
+    const p = plan(
+      doc({ name: 'checkout', steps: [{ action: 'useFlow', flow: 'login' }] }, loginDoc),
+    )
     const loginId = p.flows.find((f) => f.name === 'login')!.flowId
     const checkout = p.flows.find((f) => f.name === 'checkout')!
     expect(checkout.steps).toEqual([{ action: 'useFlow', flowId: loginId }])
@@ -140,7 +145,10 @@ describe('planFlowImport — creating', () => {
 
   test('resolves a useFlow reference to a flow already in the project', () => {
     const existing = [projectFlow({ id: 'f-login', name: 'login' })]
-    const p = plan(doc({ name: 'checkout', steps: [{ action: 'useFlow', flow: 'login' }] }), existing)
+    const p = plan(
+      doc({ name: 'checkout', steps: [{ action: 'useFlow', flow: 'login' }] }),
+      existing,
+    )
     expect(p.flows[0]?.steps).toEqual([{ action: 'useFlow', flowId: 'f-login' }])
   })
 
@@ -205,7 +213,11 @@ describe('planFlowImport — upserting', () => {
   })
 
   test('mixes creates and versions in one document', () => {
-    const p = plan(doc(loginDoc, { name: 'new-one', steps: [{ action: 'goto', url: '/' }] }), existing, 'upsert')
+    const p = plan(
+      doc(loginDoc, { name: 'new-one', steps: [{ action: 'goto', url: '/' }] }),
+      existing,
+      'upsert',
+    )
     expect([p.created, p.updated]).toEqual([1, 1])
   })
 
@@ -238,7 +250,11 @@ describe('planFlowImport — upserting', () => {
         steps: [{ action: 'useFlow', flowId: 'f-login' }],
       }),
     ]
-    const p = plan(doc({ name: 'login', steps: [{ action: 'goto', url: '/login2' }] }), withCheckout, 'upsert')
+    const p = plan(
+      doc({ name: 'login', steps: [{ action: 'goto', url: '/login2' }] }),
+      withCheckout,
+      'upsert',
+    )
     expect(p.updated).toBe(1)
   })
 })

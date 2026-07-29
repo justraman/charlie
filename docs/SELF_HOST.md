@@ -10,8 +10,8 @@ Charlie is **self-hosted, single-organization**: you deploy it to your own Cloud
 - **`bun` 1.3.13** and **`wrangler`** (authenticate once with `wrangler login`).
 - **A GitHub repository for the runner.** For v1 the runner repo *is* the Charlie repo — it already ships `.github/workflows/charlie-run.yml`. You point `GITHUB_RUNNER_REPO` at wherever you host this code.
 - **A Google Cloud project** for OIDC (an OAuth 2.0 Web client).
-- **A GitHub App** for workflow dispatch, on-merge webhooks, and AI source reads.
-- *(Optional, post-deploy)* a Slack app and/or an AI provider key — both are configured through the UI after the instance is up, not at deploy time.
+- **A GitHub App** for workflow dispatch, on-merge webhooks, and cloning the repos behind `code` flows.
+- *(Optional)* a Slack app, configured via Worker secrets.
 
 ## 1. Create the Cloudflare resources
 
@@ -38,7 +38,7 @@ Keep the **Client ID** and **Client secret** for step 4. See [AUTH.md](AUTH.md) 
 
 ## 3. GitHub App
 
-Create **one** GitHub App (not a personal token) and install it on both the runner repo and any source repos you want to watch. The App does three jobs: dispatches the reusable workflow, receives `push`/`pull_request` webhooks for on-merge triggers, and reads source (read-only) for AI flow generation. See [CI_INTEGRATION.md](CI_INTEGRATION.md) for how it's used.
+Create **one** GitHub App (not a personal token) and install it on both the runner repo and any source repos you want to watch. The App does three jobs: dispatches the reusable workflow, receives `push`/`pull_request` webhooks for on-merge triggers, and reads source (read-only) to clone the Playwright repos behind `code` flows. See [CI_INTEGRATION.md](CI_INTEGRATION.md) for how it's used.
 
 ### 3.1 Register the App
 
@@ -59,7 +59,7 @@ If you haven't deployed yet and have no domain, use a placeholder URL and edit i
 Under **Repository permissions** set exactly (least privilege):
 
 - **Actions:** Read and write — dispatch + cancel workflow runs
-- **Contents:** Read-only — checkout runner code + AI source read
+- **Contents:** Read-only — checkout runner code + clone `code`-flow repos
 - **Metadata:** Read-only — mandatory, auto-selected
 
 Under **Subscribe to events** check **Push** and **Pull request**.
@@ -68,7 +68,7 @@ Under **Subscribe to events** check **Push** and **Pull request**.
 
 1. **App ID** — shown at the top of the App page → `GITHUB_APP_ID`.
 2. **Generate a private key** (bottom of the page) → downloads a `.pem` → `GITHUB_APP_PRIVATE_KEY` (but convert it first, see 3.4).
-3. **Install App** (left sidebar) on your **runner repo** (for v1 that's the Charlie repo itself, which ships `charlie-run.yml`) and any **source repos** you want on-merge triggers / AI generation for.
+3. **Install App** (left sidebar) on your **runner repo** (for v1 that's the Charlie repo itself, which ships `charlie-run.yml`) and any **source repos** you want on-merge triggers for, plus any repo holding `code`-flow Playwright tests.
 4. After installing, the browser URL is `.../installations/<number>` — that number is `GITHUB_INSTALLATION_ID`.
 
 ### 3.4 Convert the private key to PKCS#8
@@ -102,7 +102,7 @@ wrangler secret put CHARLIE_RUN_TOKEN_SECRET   # openssl rand -base64 32 (falls 
 wrangler secret put GOOGLE_CLIENT_ID
 wrangler secret put GOOGLE_CLIENT_SECRET
 
-# GitHub App (dispatch / webhooks / AI source read)
+# GitHub App (dispatch / webhooks / source read)
 wrangler secret put GITHUB_APP_ID
 wrangler secret put GITHUB_APP_PRIVATE_KEY     # PKCS#8 PEM — preserve newlines
 wrangler secret put GITHUB_INSTALLATION_ID
@@ -115,7 +115,7 @@ Optional secrets:
 - `GITHUB_RUNNER_REF` (default `main`) and `RUNNER_WORKFLOW_FILE` (default `charlie-run.yml`) — only if your runner repo differs from the defaults.
 - `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` — enable **presigned** artifact uploads directly to R2. Absent, the Worker proxies uploads through the R2 binding, which works but funnels artifact bytes through the Worker.
 
-> **Slack and AI providers are not env secrets.** Slack's signing secret and bot token are stored encrypted in the `integrations` table via the Integrations page; AI provider keys are stored encrypted in `ai_providers` via AI Settings. Both are configured after deploy (see step 8).
+> **Slack is configured with Worker secrets too.** `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are `wrangler secret put` values, not DB rows — the Integrations page only reports their live status. There are no credentials stored in the database.
 
 ## 5. Set non-secret vars
 
@@ -166,11 +166,11 @@ bun run deploy                # vite build && wrangler deploy
 ## 8. First run
 
 1. Visit your instance and **sign in with Google**. The first user from an allowed domain becomes `owner`; the org row is seeded from `ORG_NAME` / `ALLOWED_EMAIL_DOMAINS`. Later users default to `viewer` and are promoted from the Members page.
-2. **Create a project.** Set `source_repo` (`owner/repo`) if you want on-merge triggers or AI flow generation.
+2. **Create a project.** Set `source_repo` (`owner/repo`) if you want on-merge triggers.
 3. **Add an environment** (base URL + any secrets — secrets are AES-GCM encrypted and never returned in API responses).
-4. **Author a flow** in the editor, or use **AI Settings → Suggested Flows** to draft one from source and approve it.
+4. **Author a flow** in the editor, or upload one with **Flows → Import JSON** (see [FLOW_IMPORT_EXPORT.md](FLOW_IMPORT_EXPORT.md)).
 5. **Trigger a run.** It dispatches `charlie-run.yml`, shards report back, and the run reaches `passed`/`failed` with artifacts and a live progress stream.
-6. *(Optional)* Connect **Slack** on the Integrations page and add an **AI provider** in AI Settings.
+6. *(Optional)* Set the Slack secrets and confirm the connection on the Integrations page.
 
 ## Verifying the deployment
 
@@ -183,7 +183,7 @@ bun run deploy                # vite build && wrangler deploy
 
 - **Local dev origin is `wrangler dev` on `:8787`** (serves SPA + API + local D1). `bun run dev` runs the Worker and Vite together; the Vite `:5173` server is HMR-only and proxies `/api` to the Worker. Apply local migrations with `bun run db:migrate:local`.
 - **D1 CLI uses the database name `charlie-db`** (or binding `DB`), not `charlie`.
-- **`CHARLIE_KEK` is load-bearing and unrecoverable.** It encrypts environment secrets, integration credentials, and AI keys at rest. Back it up; rotating it requires re-encrypting stored ciphertext.
+- **`CHARLIE_KEK` is load-bearing and unrecoverable.** It encrypts environment secrets at rest. Back it up; rotating it requires re-encrypting stored ciphertext.
 - **Cost.** Each run consumes GitHub Actions minutes on your account; the Cron Trigger runs once a minute to sweep due schedules. Per-project VU and concurrency caps are part of Phase 8 hardening and not yet enforced.
 
 ## Related docs
@@ -192,4 +192,4 @@ bun run deploy                # vite build && wrangler deploy
 - [AUTH.md](AUTH.md) — SSO, sessions, RBAC, audit, run tokens.
 - [CI_INTEGRATION.md](CI_INTEGRATION.md) — GitHub App, reusable workflow, dispatch, triggers.
 - [SLACK.md](SLACK.md) — connecting the Slack app and slash commands.
-- [AI_FLOWGEN.md](AI_FLOWGEN.md) — AI providers and the analyze → draft → approve flow.
+- [FLOW_IMPORT_EXPORT.md](FLOW_IMPORT_EXPORT.md) — exporting flows and uploading flow documents.
