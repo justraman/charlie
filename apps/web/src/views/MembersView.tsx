@@ -278,9 +278,7 @@ export function MembersView() {
       <Card>
         <CardHeader>
           <CardTitle>API keys</CardTitle>
-          <CardDescription>
-            Programmatic access tokens for CI and automation.
-          </CardDescription>
+          <CardDescription>Programmatic access tokens for CI and automation.</CardDescription>
           <CardAction>
             <Button type="button" variant="outline" onClick={() => setShowKeyForm((v) => !v)}>
               {showKeyForm ? 'Cancel' : 'New key'}
@@ -290,9 +288,7 @@ export function MembersView() {
         <CardContent className="space-y-4">
           {createdToken && (
             <div className="border-primary/50 bg-primary/5 space-y-3 rounded-lg border p-4">
-              <p className="text-sm font-medium">
-                Copy this key now — it will not be shown again:
-              </p>
+              <p className="text-sm font-medium">Copy this key now — it will not be shown again:</p>
               <code className="bg-muted block rounded-md px-3 py-2 font-mono text-sm break-all">
                 {createdToken}
               </code>
@@ -361,10 +357,7 @@ export function MembersView() {
               <TableBody>
                 {apiKeys.length === 0 && (
                   <TableRow>
-                    <TableCell
-                      colSpan={5}
-                      className="text-muted-foreground py-8 text-center"
-                    >
+                    <TableCell colSpan={5} className="text-muted-foreground py-8 text-center">
                       No API keys yet.
                     </TableCell>
                   </TableRow>
@@ -391,9 +384,7 @@ export function MembersView() {
                         ))}
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {fmtDate(k.lastUsedAt)}
-                    </TableCell>
+                    <TableCell className="text-muted-foreground">{fmtDate(k.lastUsedAt)}</TableCell>
                     <TableCell>
                       {k.revokedAt ? (
                         <Badge className="border-transparent bg-red-500/15 text-red-600 dark:text-red-400">
@@ -455,10 +446,7 @@ export function MembersView() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={revokeTarget !== null}
-        onOpenChange={(open) => !open && setRevokeTarget(null)}
-      >
+      <Dialog open={revokeTarget !== null} onOpenChange={(open) => !open && setRevokeTarget(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Revoke API key?</DialogTitle>

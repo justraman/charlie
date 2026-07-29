@@ -2,7 +2,7 @@
 
 **Open-source E2E and load testing for any web application.**
 
-Charlie lets QA engineers define browser flows once and run them as **end-to-end correctness tests** (Playwright) or **load tests** (k6) against any environment of any project — on demand, on a schedule, or automatically when code merges. It reports results to a dashboard and to Slack, keeps a full audit trail of who changed what, and can draft the first version of a flow for you by reading your app's source code.
+Charlie lets QA engineers define browser flows once and run them as **end-to-end correctness tests** (Playwright) or **load tests** (k6) against any environment of any project — on demand, on a schedule, or automatically when code merges. It reports results to a dashboard and to Slack, keeps a full audit trail of who changed what, and imports flows from a JSON file so you can author them however you like — including with your own AI assistant.
 
 Charlie is **not** tied to any framework, cloud, or domain. If it runs in a browser and answers on a URL, Charlie can test it.
 
@@ -18,7 +18,7 @@ Most teams stitch together three things by hand: a place to store test flows, a 
 - **Any project, any environment.** Register multiple projects; each has environments (`dev`, `qa`, `staging`, `prod`, or whatever you name) with their own base URL, headers, and secrets. Point a run at exactly one.
 - **Runs where and when you want.** Trigger manually from the dashboard, from Slack, on a cron interval, or automatically on a merge to a watched branch.
 - **Slack-native.** `/charlie run checkout --env qa` kicks off a run; results post back to the channel when they finish.
-- **AI-assisted authoring.** Connect a source repo and Charlie drafts candidate flows by reading routes, forms, and components — you review and refine instead of starting from a blank page.
+- **Author anywhere, import as JSON.** Flows are a portable JSON document. Write them in the editor, export them to review in a pull request, or have your own AI assistant generate the file (there's a [skill](skills/charlie-flow-json) for that) and upload it — Charlie validates it strictly against the flow schema and your project before anything is saved. See [docs/FLOW_IMPORT_EXPORT.md](docs/FLOW_IMPORT_EXPORT.md).
 - **Accountable by default.** Google SSO for login; every mutating action (flow edit, schedule change, run trigger, member change) is written to an immutable audit log.
 
 ---
@@ -38,7 +38,7 @@ Charlie splits cleanly into a **control plane** on Cloudflare and a **compute pl
                             ▼                               ▲
             ┌──────────────────────── GitHub Actions ───────┴─────────────┐
             │  Reusable workflow · matrix fan-out                         │
-            │  Playwright (E2E)   k6 (HTTP load)   AI repo analysis job   │
+            │  Playwright (E2E)          k6 (HTTP load)                   │
             └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -61,7 +61,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
 | E2E engine | Playwright |
 | Load engine | k6 (protocol-level HTTP) |
 | Auth | Google SSO (OIDC) |
-| AI | Pluggable provider (Anthropic Claude / OpenAI / Cloudflare Workers AI) |
 | Integrations | Slack app, GitHub App |
 | Language / tooling | TypeScript, Bun (install/runtime), Nx (monorepo), Biome, Wrangler |
 
@@ -75,7 +74,7 @@ Other confirmed decisions:
 
 - **GitHub-hosted runners** for the first release (self-hosted runner support is a later, additive feature).
 - **k6 for load, Playwright for E2E** — a single flow definition compiles to either.
-- **Pluggable AI provider** — bring your own key; Claude, OpenAI, and Workers AI are the initial adapters.
+- **No AI inside Charlie** — no provider keys, no source-code analysis, no model calls. Flow authoring that wants an assistant happens in the engineer's own harness; Charlie's contract is the JSON document it validates and runs.
 
 ---
 
@@ -90,7 +89,7 @@ Other confirmed decisions:
 | [docs/CUSTOM_TESTS.md](docs/CUSTOM_TESTS.md) | Code flows: run your own Playwright tests from a GitHub repo |
 | [docs/CI_INTEGRATION.md](docs/CI_INTEGRATION.md) | GitHub App, reusable workflow, dispatch, on-merge triggers, cron |
 | [docs/SLACK.md](docs/SLACK.md) | Slash commands, run reporting, install flow |
-| [docs/AI_FLOWGEN.md](docs/AI_FLOWGEN.md) | Source analysis, provider abstraction, flow drafting |
+| [docs/FLOW_IMPORT_EXPORT.md](docs/FLOW_IMPORT_EXPORT.md) | The portable flow document: export, upload, validation |
 | [docs/API.md](docs/API.md) | REST endpoint reference |
 | [EXECUTION_PLAN.md](EXECUTION_PLAN.md) | Phased, detailed build plan with acceptance criteria |
 
@@ -148,13 +147,13 @@ Phase 6 — Slack integration:
 - Post-run reporter: the Run Coordinator posts a Block Kit pass/fail message (flows passed, or load percentiles + breached threshold) with **View report** and **Re-run** buttons to the originating channel, and scheduled/merge runs report to the project's default channel.
 - SPA: an Integrations settings page (connect/disconnect Slack) and a per-project default report channel.
 
-Phase 7 — AI-assisted flow generation:
+Phase 7 — flow import & export (replaces the withdrawn AI flow-generation phase):
 
-- `ai_providers` (migration `0007`, bring-your-own-key encrypted at rest) with a per-org default; `flow_drafts` and `ai_analyses` track AI output and analysis jobs.
-- Analysis runs on GitHub Actions (heavy work off the Worker): an `ai-analyze` workflow checks out the project's `source_repo` read-only, a static pass extracts routes/forms/test-ids/framework, and the configured provider (Anthropic / OpenAI / Workers AI, behind an `AiProvider` interface) returns drafts under a **structured-output contract** — validated against the flow schema and rejected/retried if malformed, never executed blind.
-- Drafts POST back (analysis-token auth) and store as `origin = ai`, `status = draft`. **No environment secrets are ever sent** to the provider; drafts use `{{secrets.*}}` placeholders.
-- A draft is not runnable until an `editor` **approves** it, which mints a real flow + human-authored v1 (the AI is credited in `origin`); approval is audited.
-- SPA: AI provider settings, an "Analyze source repo" action, and a Suggested-flows review UI with the model's reasoning and source references, plus approve/reject.
+- Flows round-trip through a portable JSON document, `charlie.flows/v1` (`packages/flow-core/src/portable.ts`). Export a project or a single flow (with its `useFlow` dependencies pulled in, so the file imports standalone); upload a document to create flows or add versions to existing ones.
+- The document references composed flows **by name**, not by database id — ids are meaningless in a file written elsewhere. Export rewrites ids → names; import resolves names → ids against the document *and* the target project.
+- Uploads are untrusted: strict Zod parsing (unknown keys rejected with a JSON path), then document semantics (duplicate names, self-reference, code-flow reference, cycles), then a check against the target project (name clashes per `create`/`upsert` mode, `kind` changes, unresolvable references, cycles the import would close). Only then does it write — every flow and its audit rows in one atomic D1 batch. The UI always dry-runs first and shows the plan plus the environment secrets the steps expect.
+- Imported flows carry `origin = import` and a `flow.import_create` / `flow.import_version` audit row naming the uploader.
+- **No AI runs inside Charlie.** The `ai_providers`/`ai_analyses`/`flow_drafts` tables, the `ai-analyze` workflow, and the provider adapters were removed in migration `0005`. Teams that want a flow drafted by a model do it in their own harness with their own key; the [`charlie-flow-json` skill](skills/charlie-flow-json) (`npx skills add justraman/charlie --skill charlie-flow-json`) teaches Claude Code or Codex the document format, and the resulting file is uploaded like any other. See [docs/FLOW_IMPORT_EXPORT.md](docs/FLOW_IMPORT_EXPORT.md).
 
 **Composable flows (`useFlow`):**
 

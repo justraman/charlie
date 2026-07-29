@@ -27,7 +27,10 @@ export function emailDomain(email: string): string {
 
 /** The company-domain gate decision, pure and unit-testable. An empty/invalid
  *  address, or one whose domain isn't in the allow-list, is rejected. */
-export function isEmailAllowed(email: string | null | undefined, allowedDomains: string[]): boolean {
+export function isEmailAllowed(
+  email: string | null | undefined,
+  allowedDomains: string[],
+): boolean {
   const address = (email ?? '').toLowerCase()
   const domain = emailDomain(address)
   return address.length > 0 && domain.length > 0 && allowedDomains.includes(domain)

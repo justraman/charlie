@@ -1,4 +1,10 @@
 {
-  "//": "SPA and Worker are typechecked separately (different lib/types) via `tsc --noEmit -p tsconfig.app.json` and `-p tsconfig.worker.json` — see the `typecheck` script. This file is a placeholder so editors find a root config.",
+  "//": "SPA and Worker are typechecked separately (different lib/types) via `tsc --noEmit -p tsconfig.app.json` and `-p tsconfig.worker.json` — see the `typecheck` script. This file is a placeholder so editors find a root config; the paths below are what `bun test` uses to resolve workspace imports from tests/.",
+  "compilerOptions": {
+    "paths": {
+      "@shared/*": ["./shared/*"],
+      "@charlie/flow-core": ["../../packages/flow-core/src/index.ts"]
+    }
+  },
   "files": []
 }

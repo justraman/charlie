@@ -453,10 +453,7 @@ function ScheduleForm({
 
         <div className="space-y-2">
           <Label htmlFor="sched-engine">Engine</Label>
-          <Select
-            value={engine}
-            onValueChange={(v) => setEngine(v as 'playwright' | 'k6')}
-          >
+          <Select value={engine} onValueChange={(v) => setEngine(v as 'playwright' | 'k6')}>
             <SelectTrigger id="sched-engine" className="w-full">
               <SelectValue />
             </SelectTrigger>

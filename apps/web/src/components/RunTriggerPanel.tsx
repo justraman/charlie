@@ -110,10 +110,7 @@ export function RunTriggerPanel({ projectId }: { projectId: string }) {
 
         <div className="space-y-2">
           <Label htmlFor="run-engine">Engine</Label>
-          <Select
-            value={engine}
-            onValueChange={(v) => setEngine(v as 'playwright' | 'k6')}
-          >
+          <Select value={engine} onValueChange={(v) => setEngine(v as 'playwright' | 'k6')}>
             <SelectTrigger id="run-engine" className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -150,10 +147,7 @@ export function RunTriggerPanel({ projectId }: { projectId: string }) {
         {engine === 'k6' && (
           <div className="space-y-2">
             <Label htmlFor="run-profile">Profile</Label>
-            <Select
-              value={profile}
-              onValueChange={(v) => setProfile(v as typeof profile)}
-            >
+            <Select value={profile} onValueChange={(v) => setProfile(v as typeof profile)}>
               <SelectTrigger id="run-profile" className="w-full">
                 <SelectValue />
               </SelectTrigger>

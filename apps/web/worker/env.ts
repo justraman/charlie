@@ -36,12 +36,6 @@ export interface Env {
   SLACK_SIGNING_SECRET?: string
   SLACK_TEAM_ID?: string
 
-  // AI provider (single, secrets). Absent → AI analysis is "not configured".
-  // AI_PROVIDER selects the kind; AI_ACCOUNT_ID is only used by workers_ai.
-  AI_PROVIDER?: string // 'anthropic' | 'openai' | 'workers_ai'
-  AI_MODEL?: string
-  AI_API_KEY?: string
-  AI_ACCOUNT_ID?: string
   // Local-dev only: when set, registers a "dev" Auth.js Credentials provider
   // that signs in as this email with no external IdP (no Google client needed).
   // Lives only in .dev.vars — never `wrangler secret put` it. The provider is
@@ -75,7 +69,6 @@ export interface Env {
   GITHUB_RUNNER_REPO?: string // "owner/repo" of the Charlie runner repo
   GITHUB_RUNNER_REF?: string // git ref to dispatch (default "main")
   RUNNER_WORKFLOW_FILE?: string // default "charlie-run.yml"
-  AI_ANALYZE_WORKFLOW_FILE?: string // default "ai-analyze.yml"
 
   // R2 S3 credentials for presigned uploads. Absent → Worker-proxied upload.
   R2_ACCOUNT_ID?: string

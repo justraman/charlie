@@ -57,14 +57,19 @@ Environment responses mask secrets (`{ "SECRET_NAME": "•••set" }`); plaint
 | GET | `/api/flows/:id/versions/:v` | viewer | A specific version |
 | DELETE | `/api/flows/:id` | editor | Soft-delete (audited) |
 
-### AI flow drafts
+### Import & export
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
-| POST | `/api/projects/:id/ai/analyze` | editor | Dispatch AI analysis job (202) |
-| GET | `/api/projects/:id/flow-drafts` | viewer | List AI drafts |
-| POST | `/api/projects/:id/flow-drafts` | runToken | Ingest drafts from the analysis job |
-| POST | `/api/flow-drafts/:id/approve` | editor | Promote draft → flow v1 (audited) |
+| GET | `/api/projects/:id/flows/export` | viewer | Download the project's flows as a `charlie.flows/v1` document (`?flowIds=a,b`, `?deps=0`) |
+| GET | `/api/flows/:id/export` | viewer | Download one flow + its `useFlow` dependencies (`?deps=0`) |
+| POST | `/api/projects/:id/flows/import` | editor | Upload a document (audited); `?mode=create\|upsert`, `?dryRun=1` |
+
+Import body is either the bare document or `{ document, mode?, dryRun? }`.
+`dryRun` validates and returns the plan without writing. Validation failures are
+`400` with one `details` entry per problem, each carrying a JSON path;
+name clashes under `mode=create` are `409`. See
+[FLOW_IMPORT_EXPORT.md](FLOW_IMPORT_EXPORT.md).
 
 ## Runs
 
@@ -113,15 +118,14 @@ Create-run body:
 | PATCH | `/api/schedules/:id` | editor | Update / enable / disable (audited) |
 | DELETE | `/api/schedules/:id` | editor | Delete (audited) |
 
-## Integrations & AI providers (admin+)
+## Integrations (read-only)
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/integrations/slack/connect` | Connect Slack (audited) |
-| POST | `/api/integrations/github/connect` | Record GitHub App install (audited) |
-| GET | `/api/ai-providers` | List (keys masked) |
-| POST | `/api/ai-providers` | Add provider + key (audited) |
-| PATCH | `/api/ai-providers/:id` | Update / enable (audited) |
+Slack and GitHub credentials come from Worker secrets, never the DB, so there is
+nothing to create or update over the API.
+
+| Method | Path | Role | Purpose |
+|---|---|---|---|
+| GET | `/api/integrations` | viewer | Live connection status (`?refresh=1` bypasses the 60s KV cache). No secrets returned. |
 
 ## Webhooks & Slack (public, signature-verified)
 

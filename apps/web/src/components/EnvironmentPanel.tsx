@@ -3,13 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/auth/AuthContext'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiError, api } from '@/lib/api'
@@ -191,9 +185,7 @@ export function EnvironmentPanel({ projectId }: { projectId: string }) {
           </div>
         )}
 
-        {envs.length === 0 && (
-          <p className="text-muted-foreground text-sm">No environments yet.</p>
-        )}
+        {envs.length === 0 && <p className="text-muted-foreground text-sm">No environments yet.</p>}
 
         {envs.map((env) => {
           const d = draftFor(env.id)
@@ -218,9 +210,7 @@ export function EnvironmentPanel({ projectId }: { projectId: string }) {
               </div>
 
               <div className="space-y-2 border-t pt-3">
-                <div className="text-muted-foreground text-xs uppercase tracking-wide">
-                  Secrets
-                </div>
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">Secrets</div>
                 {Object.keys(env.secrets).length === 0 && d.adds.length === 0 && (
                   <div className="text-muted-foreground text-sm">None set.</div>
                 )}

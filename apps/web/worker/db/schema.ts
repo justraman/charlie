@@ -225,7 +225,7 @@ export const flows = sqliteTable(
   (t) => [
     uniqueIndex('idx_flows_name').on(t.project_id, t.name).where(sql`${t.deleted_at} is null`),
     index('idx_flows_project').on(t.project_id),
-    check('flows_origin_check', sql`${t.origin} in ('manual', 'recorder', 'ai')`),
+    check('flows_origin_check', sql`${t.origin} in ('manual', 'recorder', 'import')`),
     // NB: `kind` values ('steps'|'code') are enforced at the API boundary (zod).
     // A DB CHECK would force a full table rebuild here (SQLite cannot ADD a
     // constraint in place), so we deliberately keep this an additive ADD COLUMN.
@@ -402,69 +402,11 @@ export const schedules = sqliteTable(
   ],
 )
 
-// --- 0007_ai -----------------------------------------------------------------
-// Integration credentials (Slack, GitHub, AI provider) live in env/Cloudflare
-// secrets, NOT the DB — the former `integrations` and `ai_providers` tables were
-// dropped in migration 0002. `ai_analyses` only records which provider ran.
-
-export const ai_analyses = sqliteTable(
-  'ai_analyses',
-  {
-    id: text('id').primaryKey(),
-    org_id: text('org_id')
-      .notNull()
-      .references(() => organization.id),
-    project_id: text('project_id')
-      .notNull()
-      .references(() => projects.id),
-    provider_name: text('provider_name'), // which env-configured provider ran (record only)
-    ref: text('ref'), // git ref analyzed (default branch if null)
-    status: text('status').notNull(),
-    error: text('error'),
-    draft_count: integer('draft_count').notNull().default(0),
-    gha_run_id: text('gha_run_id'),
-    created_by: text('created_by').references(() => users.id),
-    created_at: text('created_at').notNull(),
-    finished_at: text('finished_at'),
-  },
-  (t) => [
-    index('idx_ai_analyses_project').on(t.project_id, sql`${t.created_at} desc`),
-    check(
-      'ai_analyses_status_check',
-      sql`${t.status} in ('queued', 'running', 'succeeded', 'failed')`,
-    ),
-  ],
-)
-
-export const flow_drafts = sqliteTable(
-  'flow_drafts',
-  {
-    id: text('id').primaryKey(),
-    org_id: text('org_id')
-      .notNull()
-      .references(() => organization.id),
-    project_id: text('project_id')
-      .notNull()
-      .references(() => projects.id),
-    analysis_id: text('analysis_id').references(() => ai_analyses.id),
-    name: text('name').notNull(),
-    description: text('description'),
-    engines: text('engines').notNull().default('["playwright"]'), // JSON array
-    steps: text('steps').notNull(), // JSON FlowStep[]
-    load_profile: text('load_profile'), // JSON (nullable)
-    reasoning: text('reasoning'), // model's rationale
-    source_refs: text('source_refs'), // JSON files/routes referenced
-    status: text('status').notNull().default('draft'),
-    origin: text('origin').notNull().default('ai'),
-    approved_flow_id: text('approved_flow_id').references(() => flows.id),
-    created_at: text('created_at').notNull(),
-    updated_at: text('updated_at').notNull(),
-  },
-  (t) => [
-    index('idx_flow_drafts_project').on(t.project_id, t.status, sql`${t.created_at} desc`),
-    check('flow_drafts_status_check', sql`${t.status} in ('draft', 'approved', 'rejected')`),
-  ],
-)
+// --- 0005_drop_ai ------------------------------------------------------------
+// Flow authoring is human-owned: flows are written in the editor or uploaded as
+// a JSON document (see docs/FLOW_IMPORT_EXPORT.md). The `ai_analyses` and
+// `flow_drafts` tables backing the old source-analysis feature were dropped in
+// migration 0005, along with the `ai` value of `flows.origin`.
 
 // Aggregate export used to build the Drizzle client (`drizzle(d1, { schema })`).
 export const schema = {
@@ -483,6 +425,4 @@ export const schema = {
   shard_results,
   reports,
   schedules,
-  ai_analyses,
-  flow_drafts,
 }

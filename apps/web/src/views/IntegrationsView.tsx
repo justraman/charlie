@@ -19,14 +19,9 @@ interface IntegrationStatus {
   connected: boolean
   detail: string | null
 }
-interface AiStatus extends IntegrationStatus {
-  provider: string | null
-  model: string | null
-}
 interface Status {
   slack: IntegrationStatus
   github: IntegrationStatus
-  ai: AiStatus
   checkedAt: string
 }
 
@@ -47,12 +42,10 @@ function StatusCard({
   title,
   description,
   s,
-  extra,
 }: {
   title: string
   description: string
   s: IntegrationStatus
-  extra?: string | null
 }) {
   return (
     <Card>
@@ -63,18 +56,13 @@ function StatusCard({
         </CardAction>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
-      {(extra || s.detail) && (
-        <CardContent className="space-y-1 text-sm">
-          {extra && <p className="text-foreground">{extra}</p>}
-          {s.detail && (
-            <p
-              className={
-                s.connected ? 'text-muted-foreground' : 'text-amber-600 dark:text-amber-400'
-              }
-            >
-              {s.detail}
-            </p>
-          )}
+      {s.detail && (
+        <CardContent className="text-sm">
+          <p
+            className={s.connected ? 'text-muted-foreground' : 'text-amber-600 dark:text-amber-400'}
+          >
+            {s.detail}
+          </p>
         </CardContent>
       )}
     </Card>
@@ -105,7 +93,7 @@ export function IntegrationsView() {
     <div className="space-y-6">
       <PageHeader
         title="Integrations"
-        description="Slack, GitHub, and the AI provider are configured via Worker secrets (environment variables). This page shows their live connection status — it does not store credentials."
+        description="Slack and GitHub are configured via Worker secrets (environment variables). This page shows their live connection status — it does not store credentials."
       />
 
       <div className="flex items-center gap-3">
@@ -137,16 +125,6 @@ export function IntegrationsView() {
             title="GitHub"
             description="The GitHub App (dispatch + on-merge webhooks) is configured via Worker secrets. Verified by minting an installation token."
             s={status.github}
-          />
-          <StatusCard
-            title="AI provider"
-            description="A single provider is set via AI_PROVIDER / AI_MODEL / AI_API_KEY (Cloudflare secrets). Verified with a models-list call."
-            s={status.ai}
-            extra={
-              status.ai.provider
-                ? `${status.ai.provider}${status.ai.model ? ` · ${status.ai.model}` : ''}`
-                : null
-            }
           />
         </>
       )}

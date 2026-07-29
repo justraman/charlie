@@ -1,0 +1,73 @@
+{
+  "format": "charlie.flows/v1",
+  "project": "storefront",
+  "notes": "Reference example: a shared login flow, an E2E journey that composes it, and a k6-safe load flow.",
+  "flows": [
+    {
+      "kind": "steps",
+      "name": "login",
+      "description": "Sign in with a valid account and land on the dashboard",
+      "engines": ["playwright"],
+      "steps": [
+        { "action": "goto", "url": "/login" },
+        {
+          "action": "fill",
+          "selector": "input[name=\"email\"]",
+          "value": "{{secrets.TEST_EMAIL}}"
+        },
+        {
+          "action": "fill",
+          "selector": "input[name=\"password\"]",
+          "value": "{{secrets.TEST_PASSWORD}}"
+        },
+        { "action": "submit", "selector": "form", "label": "sign in" },
+        {
+          "action": "assert",
+          "selector": "[data-test=\"dashboard\"]",
+          "state": "visible",
+          "captureOnFail": true
+        }
+      ]
+    },
+    {
+      "kind": "steps",
+      "name": "guest-checkout",
+      "description": "Add one item to the cart and place the order as a signed-in user",
+      "engines": ["playwright"],
+      "steps": [
+        { "action": "useFlow", "flow": "login", "label": "sign in first" },
+        { "action": "goto", "url": "/products/starter-kit" },
+        { "action": "click", "selector": "[data-test=\"add-to-cart\"]" },
+        { "action": "assert", "selector": "[data-test=\"cart-count\"]", "state": "visible" },
+        { "action": "goto", "url": "/cart" },
+        { "action": "click", "selector": "[data-test=\"place-order\"]" },
+        { "action": "waitFor", "selector": "[data-test=\"order-confirmation\"]" },
+        {
+          "action": "assert",
+          "selector": "[data-test=\"order-number\"]",
+          "state": "visible",
+          "captureOnFail": true,
+          "label": "order was placed"
+        },
+        { "action": "assert", "selector": "[data-test=\"error\"]", "state": "hidden" }
+      ]
+    },
+    {
+      "kind": "steps",
+      "name": "search-load",
+      "description": "HTTP path behind the search page — safe to compile to k6",
+      "engines": ["playwright", "k6"],
+      "steps": [
+        { "action": "setHeader", "name": "X-Load-Test", "value": "charlie" },
+        { "action": "goto", "url": "/search?q=starter" },
+        { "action": "assert", "text": "results for" },
+        { "action": "waitFor", "ms": 500, "label": "think time between pages" },
+        { "action": "goto", "url": "/search?q=starter&page=2" },
+        { "action": "assert", "text": "results for" }
+      ],
+      "loadProfile": {
+        "profile": "smoke"
+      }
+    }
+  ]
+}

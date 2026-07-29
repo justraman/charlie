@@ -1,11 +1,10 @@
 // Integration configuration is sourced from env (Cloudflare secrets), never the
 // DB. This module exposes the Slack credential helpers and the consolidated
 // live-status used by the Integrations page. Each "connected" flag comes from a
-// real connectivity check (Slack auth.test, GitHub token mint, AI models ping),
-// cached briefly in KV so the page stays responsive and we don't hammer APIs.
+// real connectivity check (Slack auth.test, GitHub token mint), cached briefly
+// in KV so the page stays responsive and we don't hammer APIs.
 
 import type { Env } from '../env'
-import { aiCheck, aiConfigured, resolveAiProvider } from './ai'
 import { githubCheck, githubConfigured } from './github'
 import { slackAuthTest } from './slack'
 
@@ -35,18 +34,15 @@ export interface IntegrationStatus {
   connected: boolean
   detail: string | null
 }
-export interface AiStatus extends IntegrationStatus {
-  provider: string | null
-  model: string | null
-}
 export interface IntegrationsStatus {
   slack: IntegrationStatus
   github: IntegrationStatus
-  ai: AiStatus
   checkedAt: string
 }
 
-const STATUS_KV_KEY = 'intstatus:v1'
+// v2: the AI-provider entry was removed from the payload — bump so a cached v1
+// blob isn't served to the new page shape.
+const STATUS_KV_KEY = 'intstatus:v2'
 const STATUS_TTL_SEC = 60
 
 /**
@@ -70,13 +66,11 @@ export async function getIntegrationsStatus(
     }
   }
 
-  const provider = resolveAiProvider(env)
-  const [slackChk, githubChk, aiChk] = await Promise.all([
+  const [slackChk, githubChk] = await Promise.all([
     slackConfigured(env)
       ? slackAuthTest(env.SLACK_BOT_TOKEN!, env.SLACK_API_BASE)
       : Promise.resolve({ ok: false, detail: null as string | null }),
     githubCheck(env),
-    aiCheck(env),
   ])
 
   const status: IntegrationsStatus = {
@@ -89,13 +83,6 @@ export async function getIntegrationsStatus(
       configured: githubConfigured(env),
       connected: githubChk.ok,
       detail: githubChk.detail,
-    },
-    ai: {
-      configured: aiConfigured(env),
-      connected: aiChk.ok,
-      detail: aiChk.detail,
-      provider: provider?.name ?? env.AI_PROVIDER ?? null,
-      model: provider?.model ?? env.AI_MODEL ?? null,
     },
     checkedAt: new Date().toISOString(),
   }

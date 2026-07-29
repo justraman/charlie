@@ -1,12 +1,12 @@
-import { AlertCircleIcon, ArrowLeftIcon, PlusIcon, Trash2Icon } from 'lucide-react'
+import { AlertCircleIcon, ArrowLeftIcon, DownloadIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
 import { EnvironmentPanel } from '@/components/EnvironmentPanel'
+import { FlowImportDialog } from '@/components/FlowImportDialog'
 import { PageHeader } from '@/components/page-header'
 import { RunTriggerPanel } from '@/components/RunTriggerPanel'
 import { SchedulesPanel } from '@/components/SchedulesPanel'
-import { SuggestedFlowsPanel } from '@/components/SuggestedFlowsPanel'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -145,16 +145,31 @@ export function ProjectDetailView() {
           <Card>
             <CardHeader>
               <CardTitle>Flows</CardTitle>
-              {can('flows.write') && (
-                <CardAction>
-                  <Button asChild size="sm">
-                    <Link to={`/projects/${projectId}/flows/new`}>
-                      <PlusIcon />
-                      New flow
-                    </Link>
-                  </Button>
-                </CardAction>
-              )}
+              <CardAction>
+                <div className="flex flex-wrap items-center gap-2">
+                  {flows.length > 0 && (
+                    <Button asChild variant="outline" size="sm">
+                      {/* Same-origin GET — the session cookie rides along, and
+                          the Worker sets content-disposition for the download. */}
+                      <a href={`/api/projects/${projectId}/flows/export`}>
+                        <DownloadIcon />
+                        Export all
+                      </a>
+                    </Button>
+                  )}
+                  {can('flows.write') && projectId && (
+                    <FlowImportDialog projectId={projectId} onImported={load} />
+                  )}
+                  {can('flows.write') && (
+                    <Button asChild size="sm">
+                      <Link to={`/projects/${projectId}/flows/new`}>
+                        <PlusIcon />
+                        New flow
+                      </Link>
+                    </Button>
+                  )}
+                </div>
+              </CardAction>
             </CardHeader>
             <CardContent>
               <Table>
@@ -202,6 +217,16 @@ export function ProjectDetailView() {
                           <Button asChild variant="outline" size="sm">
                             <Link to={`/flows/${fl.id}/history`}>History</Link>
                           </Button>
+                          <Button
+                            asChild
+                            variant="outline"
+                            size="sm"
+                            aria-label={`Export ${fl.name} as JSON`}
+                          >
+                            <a href={`/api/flows/${fl.id}/export`}>
+                              <DownloadIcon />
+                            </a>
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -210,11 +235,6 @@ export function ProjectDetailView() {
               </Table>
             </CardContent>
           </Card>
-
-          <section className="space-y-4">
-            <h2 className="text-lg font-semibold">Suggested flows (AI)</h2>
-            {projectId && <SuggestedFlowsPanel projectId={projectId} />}
-          </section>
 
           <section className="space-y-4">
             <h2 className="text-lg font-semibold">Schedules</h2>

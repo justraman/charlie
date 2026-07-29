@@ -36,6 +36,13 @@
       "when": 1784750758100,
       "tag": "0004_black_thor_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785353654850,
+      "tag": "0005_drop_ai",
+      "breakpoints": true
     }
   ]
 }

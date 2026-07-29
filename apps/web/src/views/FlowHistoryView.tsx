@@ -102,7 +102,9 @@ export function FlowHistoryView() {
                   <div className="flex items-center gap-2">
                     <strong className="text-sm">v{v.version}</strong>
                     {v.isCurrent && <Badge variant="secondary">current</Badge>}
-                    <span className="text-muted-foreground ml-auto text-xs">{fmt(v.createdAt)}</span>
+                    <span className="text-muted-foreground ml-auto text-xs">
+                      {fmt(v.createdAt)}
+                    </span>
                   </div>
                   <div className="text-muted-foreground mt-0.5 text-sm">
                     {v.authorName || v.authorEmail || 'unknown'}
