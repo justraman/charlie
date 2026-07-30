@@ -166,6 +166,24 @@ function statusBadge(status: string): string {
   }
 }
 
+/**
+ * Which flows a shard carries. Mirrors `flowsForShard` in
+ * packages/runner/src/execute.ts: shard i runs flows whose index ≡ i (mod
+ * expectedShards). For e2e, `sizeShards` sets expectedShards = flowCount, so
+ * each shard carries exactly one flow; k6 uses a single shard for all of them.
+ */
+function flowsForShard(flows: { name: string }[], total: number, index: number): string[] {
+  return flows.filter((_, i) => i % total === index).map((f) => f.name)
+}
+
+/** Human label for a shard: its flow name, falling back to the index. */
+function shardLabel(flows: { name: string }[], total: number, index: number): string {
+  const names = flowsForShard(flows, total, index)
+  if (names.length === 0) return `#${index}`
+  if (names.length <= 2) return names.join(', ')
+  return `${names[0]} +${names.length - 1} more`
+}
+
 /** Dot color for a shard status indicator. */
 function shardDot(status: string): string {
   switch (status) {
@@ -267,13 +285,19 @@ function LoadReport({ summary }: { summary: LoadSummary }) {
   )
 }
 
+type LogEntry =
+  | { kind: 'shard'; shardIndex: number; status: string }
+  | { kind: 'run'; status: string }
+
 export function RunDetailView() {
   const { id: runId } = useParams<{ id: string }>()
   const { can } = useAuth()
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [liveStatus, setLiveStatus] = useState<string | null>(null)
   const [liveShards, setLiveShards] = useState<Record<number, string>>({})
-  const [log, setLog] = useState<string[]>([])
+  // Structured so shard lines can be labelled with the flow name at render
+  // time — the SSE handler's closure has no access to `detail`.
+  const [log, setLog] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
@@ -307,10 +331,13 @@ export function RunDetailView() {
           if (event.snapshot.status) setLiveStatus(event.snapshot.status)
         } else if (event.type === 'shard-result') {
           setLiveShards((prev) => ({ ...prev, [event.shardIndex]: event.status }))
-          setLog((l) => [...l, `shard ${event.shardIndex} → ${event.status}`])
+          setLog((l) => [
+            ...l,
+            { kind: 'shard', shardIndex: event.shardIndex, status: event.status },
+          ])
         } else if (event.type === 'run-status') {
           setLiveStatus(event.status)
-          setLog((l) => [...l, `run → ${event.status}`])
+          setLog((l) => [...l, { kind: 'run', status: event.status }])
           if (event.terminal) {
             es.close()
             void loadDetail()
@@ -355,6 +382,8 @@ export function RunDetailView() {
   const status = liveStatus ?? detail.run.status
   const shardStatus = (index: number) =>
     liveShards[index] ?? detail.shards.find((s) => s.index === index)?.status ?? 'pending'
+  const labelOf = (index: number) =>
+    shardLabel(detail.run.flowSelection, detail.run.expectedShards, index)
   const canCancel = can('runs.trigger') && !TERMINAL.includes(status)
 
   return (
@@ -409,7 +438,8 @@ export function RunDetailView() {
                 className="bg-muted/40 inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs"
               >
                 <span className={cn('size-2 rounded-full', shardDot(shardStatus(i)))} aria-hidden />
-                #{i} {shardStatus(i)}
+                <span className="font-medium">{labelOf(i)}</span>
+                <span className="text-muted-foreground">{shardStatus(i)}</span>
               </span>
             ))}
           </div>
@@ -417,7 +447,11 @@ export function RunDetailView() {
             <div className="bg-muted max-h-52 overflow-y-auto rounded-md p-3 font-mono text-xs">
               {log.map((line, i) => (
                 // biome-ignore lint/suspicious/noArrayIndexKey: append-only log lines
-                <div key={i}>{line}</div>
+                <div key={i}>
+                  {line.kind === 'shard'
+                    ? `${labelOf(line.shardIndex)} → ${line.status}`
+                    : `run → ${line.status}`}
+                </div>
               ))}
             </div>
           )}
@@ -478,7 +512,7 @@ export function RunDetailView() {
           )}
           {detail.results.map((r) => (
             <div key={r.shardIndex} className="space-y-2">
-              <strong className="text-sm">Shard #{r.shardIndex}</strong>
+              <strong className="text-sm">{labelOf(r.shardIndex)}</strong>
               <ul className="text-muted-foreground list-inside list-disc text-sm">
                 {r.flowResults.map((f) => (
                   <li key={f.flow}>
