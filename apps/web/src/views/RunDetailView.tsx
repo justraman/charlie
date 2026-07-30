@@ -289,6 +289,156 @@ type LogEntry =
   | { kind: 'shard'; shardIndex: number; status: string }
   | { kind: 'run'; status: string }
 
+interface CiStep {
+  name: string
+  status: string
+  conclusion: string | null
+  number: number
+}
+interface CiJob {
+  id: string
+  name: string
+  status: string
+  conclusion: string | null
+  startedAt: string | null
+  completedAt: string | null
+  steps: CiStep[]
+}
+interface CiLogs {
+  available: boolean
+  reason: string | null
+  ghaRunId?: string
+  jobs: CiJob[]
+}
+
+/** Why a run has no CI logs, in words a QA engineer can act on. */
+function ciUnavailableMessage(reason: string | null): string {
+  switch (reason) {
+    case 'not-configured':
+      return 'No GitHub App configured, so this run has no CI logs.'
+    case 'no-workflow-run':
+      return 'No GitHub Actions run is linked yet — the run is still queued, or dispatch never resolved a workflow run id.'
+    default:
+      return `Could not load CI logs: ${reason ?? 'unknown error'}`
+  }
+}
+
+/** A CI job with its steps and, on demand, its log tail. */
+function CiJobPanel({ runId, job }: { runId: string; job: CiJob }) {
+  const [log, setLog] = useState<{ text: string | null; truncated: boolean } | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setErr(null)
+    try {
+      setLog(
+        await api.get<{ text: string | null; truncated: boolean }>(
+          `/api/runs/${runId}/ci-logs/${job.id}`,
+        ),
+      )
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [runId, job.id])
+
+  // The step that is running now, or the one that failed — the useful summary.
+  const notable =
+    job.steps.find((s) => s.status === 'in_progress') ??
+    job.steps.find((s) => s.conclusion === 'failure' || s.conclusion === 'timed_out')
+
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={cn('size-2 rounded-full', shardDot(ciStatus(job)))} aria-hidden />
+        <strong className="text-sm">{job.name}</strong>
+        <Badge className={statusBadge(ciStatus(job))}>{job.conclusion ?? job.status}</Badge>
+        {notable && (
+          <span className="text-muted-foreground text-xs">
+            {notable.status === 'in_progress' ? 'running: ' : 'failed at: '}
+            {notable.name}
+          </span>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="ml-auto"
+          onClick={() => void load()}
+          disabled={loading}
+        >
+          {loading ? 'Loading…' : log ? 'Refresh log' : 'View log'}
+        </Button>
+      </div>
+
+      {err && <p className="text-destructive text-xs">{err}</p>}
+      {log && log.text === null && (
+        <p className="text-muted-foreground text-xs">
+          GitHub has no log for this job yet (it may still be queued, or the log has expired).
+        </p>
+      )}
+      {log?.text && (
+        <>
+          {log.truncated && (
+            <p className="text-muted-foreground text-xs">
+              Showing the last {Math.round(log.text.length / 1000)}KB — earlier output truncated.
+            </p>
+          )}
+          <pre className="bg-muted max-h-96 overflow-auto rounded-md p-3 font-mono text-xs whitespace-pre-wrap">
+            {log.text}
+          </pre>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Lazily-loaded per-flow log.txt (uploaded by the runner for every flow). */
+function FlowLogPanel({ runId, artifactKey }: { runId: string; artifactKey: string }) {
+  const [text, setText] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  // ".../<flow>/log.txt" → the flow name, so a multi-flow shard is readable.
+  const flow = artifactKey.split('/').slice(-2)[0] ?? 'flow'
+
+  async function load() {
+    if (text !== null) return // already loaded
+    try {
+      const res = await fetch(
+        `/api/runs/${runId}/artifact?key=${encodeURIComponent(artifactKey)}`,
+        { credentials: 'same-origin' },
+      )
+      if (!res.ok) throw new Error(`Failed to load log (${res.status})`)
+      setText(await res.text())
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  return (
+    <details className="rounded-md border px-3 py-2" onToggle={() => void load()}>
+      <summary className="cursor-pointer text-xs font-medium">{flow} — log</summary>
+      {err && <p className="text-destructive mt-2 text-xs">{err}</p>}
+      {text !== null && (
+        <pre className="bg-muted mt-2 max-h-80 overflow-auto rounded-md p-3 font-mono text-xs whitespace-pre-wrap">
+          {text}
+        </pre>
+      )}
+    </details>
+  )
+}
+
+/** Map a CI job's GitHub status/conclusion onto our shard status vocabulary. */
+function ciStatus(job: CiJob): string {
+  if (job.status === 'in_progress') return 'running'
+  if (job.conclusion === 'success') return 'passed'
+  if (job.conclusion === 'failure' || job.conclusion === 'timed_out') return 'failed'
+  if (job.conclusion === 'cancelled') return 'cancelled'
+  return 'pending'
+}
+
 export function RunDetailView() {
   const { id: runId } = useParams<{ id: string }>()
   const { can } = useAuth()
@@ -299,6 +449,7 @@ export function RunDetailView() {
   // time — the SSE handler's closure has no access to `detail`.
   const [log, setLog] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [ci, setCi] = useState<CiLogs | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
   const loadDetail = useCallback(async () => {
@@ -315,6 +466,26 @@ export function RunDetailView() {
   useEffect(() => {
     void loadDetail()
   }, [loadDetail])
+
+  const loadCi = useCallback(async () => {
+    if (!runId) return
+    try {
+      setCi(await api.get<CiLogs>(`/api/runs/${runId}/ci-logs`))
+    } catch {
+      /* non-fatal: the CI card just stays empty */
+    }
+  }, [runId])
+
+  // Job/step status is the only progress signal for a shard that hasn't
+  // reported, so poll it while the run is live. `status` is the SSE-updated
+  // value, so this stops as soon as the run reaches a terminal state.
+  useEffect(() => {
+    void loadCi()
+    const live = detail && !TERMINAL.includes(liveStatus ?? detail.run.status)
+    if (!live) return
+    const t = setInterval(() => void loadCi(), 15_000)
+    return () => clearInterval(t)
+  }, [loadCi, detail, liveStatus])
 
   // Live progress via SSE from the run's Coordinator DO.
   useEffect(() => {
@@ -458,6 +629,28 @@ export function RunDetailView() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+          <CardTitle>CI logs</CardTitle>
+          <Button type="button" variant="outline" size="sm" onClick={() => void loadCi()}>
+            Refresh
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {!ci && <p className="text-muted-foreground text-sm">Loading…</p>}
+          {ci && !ci.available && (
+            <p className="text-muted-foreground text-sm">{ciUnavailableMessage(ci.reason)}</p>
+          )}
+          {ci?.available && ci.jobs.length === 0 && (
+            <p className="text-muted-foreground text-sm">
+              The workflow run has no jobs yet — GitHub is still scheduling it.
+            </p>
+          )}
+          {ci?.available &&
+            ci.jobs.map((job) => <CiJobPanel key={job.id} runId={detail.run.id} job={job} />)}
+        </CardContent>
+      </Card>
+
       {detail.report && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
@@ -488,6 +681,15 @@ export function RunDetailView() {
             <p className="text-sm">
               Result: <strong>{detail.report.status}</strong>
             </p>
+            {/* The Coordinator records *why* it closed a run early (e.g. a
+                dead-shard timeout). Surfacing it turns an unexplained "failed"
+                into a pointer at the CI logs below. */}
+            {typeof detail.report.totals?.reason === 'string' && (
+              <p className="text-muted-foreground text-sm">
+                Closed early: {detail.report.totals.reason} — the shards below that never reported
+                have no result of their own; check the CI logs for the cause.
+              </p>
+            )}
             {detail.report.e2eSummary && (
               <p className="text-muted-foreground text-sm">
                 Flows passed: {String(detail.report.e2eSummary.flowsPassed)} · failed:{' '}
@@ -522,8 +724,18 @@ export function RunDetailView() {
                   </li>
                 ))}
               </ul>
+              {/* The runner writes a log.txt per flow (console output, page
+                  errors, per-step results) — worth reading inline rather than
+                  as a file link, since it's the first place a step failure
+                  explains itself. */}
+              {r.artifactKeys
+                .filter((k) => k.endsWith('log.txt'))
+                .map((key) => (
+                  <FlowLogPanel key={key} runId={detail.run.id} artifactKey={key} />
+                ))}
               <div className="flex flex-wrap gap-3">
                 {r.artifactKeys.map((key) => {
+                  if (key.endsWith('log.txt')) return null // rendered inline above
                   const url = `/api/runs/${detail.run.id}/artifact?key=${encodeURIComponent(key)}`
                   const name = key.split('/').slice(-2).join('/')
                   return key.endsWith('.png') ? (

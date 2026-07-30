@@ -6,8 +6,11 @@ import {
   cancelWorkflowRun,
   createAppJwt,
   dispatchWorkflow,
+  fetchJobLog,
   getInstallationToken,
   githubConfigured,
+  listWorkflowJobs,
+  MAX_LOG_CHARS,
   resolveRunId,
 } from '../worker/lib/github'
 
@@ -148,5 +151,124 @@ describe('cancelWorkflowRun', () => {
       ['/cancel', () => new Response(null, { status: 202 })],
     ])
     expect(await cancelWorkflowRun(testEnv(), '222', { fetchImpl })).toBe(true)
+  })
+})
+
+describe('listWorkflowJobs', () => {
+  test('maps jobs and their steps', async () => {
+    const { fetchImpl } = mockFetch([
+      tokenRoute,
+      [
+        '/jobs',
+        () =>
+          new Response(
+            JSON.stringify({
+              jobs: [
+                {
+                  id: 555,
+                  name: 'execute (0)',
+                  status: 'in_progress',
+                  conclusion: null,
+                  started_at: '2020-01-01T00:00:00Z',
+                  completed_at: null,
+                  steps: [
+                    { name: 'Execute shard', status: 'in_progress', conclusion: null, number: 6 },
+                  ],
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+      ],
+    ])
+    const jobs = await listWorkflowJobs(testEnv(), '222', { fetchImpl })
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0]!.id).toBe('555') // stringified for comparison against route params
+    expect(jobs[0]!.status).toBe('in_progress')
+    expect(jobs[0]!.steps[0]!.name).toBe('Execute shard')
+  })
+
+  test('tolerates a job with no steps array', async () => {
+    const { fetchImpl } = mockFetch([
+      tokenRoute,
+      ['/jobs', () => new Response(JSON.stringify({ jobs: [{ id: 1 }] }), { status: 200 })],
+    ])
+    const jobs = await listWorkflowJobs(testEnv(), '222', { fetchImpl })
+    expect(jobs[0]!.steps).toEqual([])
+    expect(jobs[0]!.name).toBe('(unnamed job)')
+  })
+
+  test('throws on a non-ok response', async () => {
+    const { fetchImpl } = mockFetch([
+      tokenRoute,
+      ['/jobs', () => new Response('nope', { status: 403 })],
+    ])
+    await expect(listWorkflowJobs(testEnv(), '222', { fetchImpl })).rejects.toThrow(
+      /list jobs failed \(403\)/,
+    )
+  })
+})
+
+describe('fetchJobLog', () => {
+  test('follows the 302 and returns the log text', async () => {
+    const { fetchImpl } = mockFetch([
+      tokenRoute,
+      [
+        'api.github.com',
+        () => new Response(null, { status: 302, headers: { location: 'https://blob.example/l' } }),
+      ],
+      ['blob.example', () => new Response('timeout waiting for selector #login', { status: 200 })],
+    ])
+    const log = await fetchJobLog(testEnv(), '555', { fetchImpl })
+    expect(log?.text).toContain('timeout waiting for selector')
+    expect(log?.truncated).toBe(false)
+  })
+
+  test('never forwards the installation token to the redirect host', async () => {
+    // The blob URL is pre-signed and lives on a third-party host; sending the
+    // App's installation token there would leak a credential.
+    const seen: Array<{ url: string; auth: string | null }> = []
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const auth = new Headers(init?.headers).get('authorization')
+      seen.push({ url, auth })
+      if (url.includes('/access_tokens')) {
+        return new Response(
+          JSON.stringify({ token: 'ghs_tok', expires_at: '2999-01-01T00:00:00Z' }),
+          { status: 201 },
+        )
+      }
+      if (url.includes('api.github.com')) {
+        return new Response(null, { status: 302, headers: { location: 'https://blob.example/l' } })
+      }
+      return new Response('log body', { status: 200 })
+    }) as unknown as typeof fetch
+
+    await fetchJobLog(testEnv(), '555', { fetchImpl })
+    const blobCall = seen.find((s) => s.url.includes('blob.example'))
+    expect(blobCall).toBeDefined()
+    expect(blobCall!.auth).toBeNull()
+    // ...while the api.github.com call *is* authenticated.
+    expect(seen.find((s) => s.url.includes('/actions/jobs/'))!.auth).toContain('ghs_tok')
+  })
+
+  test('tails an oversized log and flags it truncated', async () => {
+    const big = `${'x'.repeat(MAX_LOG_CHARS)}THE-END`
+    const { fetchImpl } = mockFetch([
+      tokenRoute,
+      ['api.github.com', () => new Response(big, { status: 200 })],
+    ])
+    const log = await fetchJobLog(testEnv(), '555', { fetchImpl })
+    expect(log?.truncated).toBe(true)
+    expect(log!.text.length).toBe(MAX_LOG_CHARS)
+    expect(log!.text.endsWith('THE-END')).toBe(true) // kept the tail, not the head
+  })
+
+  test('returns null when GitHub has no log yet', async () => {
+    const { fetchImpl } = mockFetch([
+      tokenRoute,
+      ['api.github.com', () => new Response('not found', { status: 404 })],
+    ])
+    expect(await fetchJobLog(testEnv(), '555', { fetchImpl })).toBeNull()
   })
 })

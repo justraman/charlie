@@ -17,6 +17,7 @@ import { getOrganization } from '../lib/org'
 import { createRun } from '../lib/run-create'
 import {
   parseSlackCommand,
+  postEphemeral,
   respondUrl,
   SLACK_HELP,
   usersInfoEmail,
@@ -249,10 +250,32 @@ async function rerunFromSlack(
   ctx: { runId: string; userId: string; channelId: string; responseUrl: string },
 ): Promise<void> {
   const { runId, userId, channelId, responseUrl } = ctx
+
+  /**
+   * Tell only the person who clicked, in a *new* message, leaving the run
+   * summary the button lives in untouched. chat.postEphemeral is the primary
+   * path because it structurally cannot edit the original; the response_url
+   * fallback pins `replace_original: false` rather than trusting the default
+   * (which differs between slash-command and interactivity surfaces).
+   */
+  const tellClicker = async (text: string): Promise<void> => {
+    if (channelId && userId) {
+      const sent = await postEphemeral(
+        integration.botToken,
+        channelId,
+        userId,
+        text,
+        env.SLACK_API_BASE,
+      )
+      if (sent) return
+    }
+    if (responseUrl) await respondUrl(responseUrl, text, true, false)
+  }
+
   const email = await usersInfoEmail(integration.botToken, userId, env.SLACK_API_BASE)
   const user = email ? await userByEmail(env, integration.orgId, email) : null
   if (!user || !roleHasCapability(user.role, 'runs.trigger')) {
-    if (responseUrl) await respondUrl(responseUrl, "You don't have permission to re-run.")
+    await tellClicker("You don't have permission to re-run.")
     return
   }
 
@@ -269,7 +292,7 @@ async function rerunFromSlack(
     .where(and(eq(runs.id, runId), eq(runs.org_id, integration.orgId)))
     .get()
   if (!orig) {
-    if (responseUrl) await respondUrl(responseUrl, 'Original run not found.')
+    await tellClicker('Original run not found.')
     return
   }
 
@@ -292,12 +315,7 @@ async function rerunFromSlack(
     if (responseUrl)
       await respondUrl(responseUrl, `:repeat: Re-running — <${link}|track it>.`, false)
   } catch (err) {
-    if (responseUrl) {
-      await respondUrl(
-        responseUrl,
-        `⚠️ ${err instanceof HttpError ? err.message : 'Re-run failed.'}`,
-      )
-    }
+    await tellClicker(`⚠️ ${err instanceof HttpError ? err.message : 'Re-run failed.'}`)
   }
 }
 

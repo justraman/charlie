@@ -167,6 +167,127 @@ export async function resolveRunId(
   return recent[0] ? String(recent[0].id) : null
 }
 
+export interface WorkflowJobStep {
+  name: string
+  status: string
+  conclusion: string | null
+  number: number
+}
+
+export interface WorkflowJob {
+  id: string
+  name: string
+  status: string
+  conclusion: string | null
+  startedAt: string | null
+  completedAt: string | null
+  steps: WorkflowJobStep[]
+}
+
+/**
+ * Jobs of a dispatched workflow run, with their per-step status. Reading these
+ * needs `actions: read`, which the App's `actions: write` (used for dispatch)
+ * already subsumes — see docs/CI_INTEGRATION.md.
+ *
+ * Step status is the only live progress signal available for a shard that has
+ * not posted a result yet, so this doubles as the "what is it doing right now"
+ * view for a run still in flight.
+ */
+export async function listWorkflowJobs(
+  env: Env,
+  ghaRunId: string,
+  deps: GithubDeps = {},
+): Promise<WorkflowJob[]> {
+  const doFetch = deps.fetchImpl ?? fetch
+  const token = await getInstallationToken(env, deps)
+  const res = await doFetch(
+    `${GH_API}/repos/${repoOf(env)}/actions/runs/${ghaRunId}/jobs?per_page=100`,
+    {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: 'application/vnd.github+json',
+        'user-agent': UA,
+      },
+    },
+  )
+  if (!res.ok) {
+    throw new Error(`list jobs failed (${res.status}): ${(await res.text()).slice(0, 300)}`)
+  }
+  const body = (await res.json()) as {
+    jobs?: Array<{
+      id: number
+      name?: string
+      status?: string
+      conclusion?: string | null
+      started_at?: string | null
+      completed_at?: string | null
+      steps?: Array<{ name?: string; status?: string; conclusion?: string | null; number?: number }>
+    }>
+  }
+  return (body.jobs ?? []).map((j) => ({
+    id: String(j.id),
+    name: j.name ?? '(unnamed job)',
+    status: j.status ?? 'unknown',
+    conclusion: j.conclusion ?? null,
+    startedAt: j.started_at ?? null,
+    completedAt: j.completed_at ?? null,
+    steps: (j.steps ?? []).map((s) => ({
+      name: s.name ?? '(unnamed step)',
+      status: s.status ?? 'unknown',
+      conclusion: s.conclusion ?? null,
+      number: s.number ?? 0,
+    })),
+  }))
+}
+
+/** Tail cap: job logs can run to megabytes and the tail holds the failure. */
+export const MAX_LOG_CHARS = 256_000
+
+/**
+ * Plain-text log for one job, tail-capped. GitHub answers with a 302 to a
+ * short-lived (≈1 min) blob URL on a *different* host, so we resolve the
+ * redirect manually and re-fetch without the installation token — forwarding
+ * the token off api.github.com would leak a credential to a third-party host.
+ *
+ * Returns null when GitHub has no log yet (a queued job, or a run whose logs
+ * have expired), which callers surface as "not available yet" rather than an error.
+ */
+export async function fetchJobLog(
+  env: Env,
+  jobId: string,
+  deps: GithubDeps = {},
+): Promise<{ text: string; truncated: boolean } | null> {
+  const doFetch = deps.fetchImpl ?? fetch
+  const token = await getInstallationToken(env, deps)
+  const res = await doFetch(`${GH_API}/repos/${repoOf(env)}/actions/jobs/${jobId}/logs`, {
+    method: 'GET',
+    redirect: 'manual',
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: 'application/vnd.github+json',
+      'user-agent': UA,
+    },
+  })
+
+  let text: string
+  const location = res.headers.get('location')
+  if (location) {
+    // Unauthenticated on purpose: the blob URL is pre-signed.
+    const blob = await doFetch(location, { headers: { 'user-agent': UA } })
+    if (!blob.ok) return null
+    text = await blob.text()
+  } else if (res.ok) {
+    text = await res.text() // some responses inline the body instead of redirecting
+  } else {
+    return null // 404 while queued, 410 once expired
+  }
+
+  if (text.length > MAX_LOG_CHARS) {
+    return { text: text.slice(-MAX_LOG_CHARS), truncated: true }
+  }
+  return { text, truncated: false }
+}
+
 export async function cancelWorkflowRun(
   env: Env,
   ghaRunId: string,

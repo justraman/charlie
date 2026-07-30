@@ -163,11 +163,11 @@ export function runParentText(input: {
   const where = `${input.project}@${input.environment}`
   switch (input.phase) {
     case 'started':
-      return `⏳ Started flow "${input.flowLabel}" on ${where}`
+      return `⏳ Started flow \`${input.flowLabel}\` on ${where}`
     case 'passed':
-      return `✅ Completed flow "${input.flowLabel}" on ${where}`
+      return `✅ Completed flow \`${input.flowLabel}\` on ${where}`
     case 'failed':
-      return `🔴 Failed flow "${input.flowLabel}" on ${where}`
+      return `🔴 Failed flow \`${input.flowLabel}\` on ${where}`
   }
 }
 
@@ -176,7 +176,7 @@ export function runParentText(input: {
 export function buildRunParentBlocks(input: RunParentInput): unknown[] {
   const text = runParentText(input)
   const runUrl = `${input.appBaseUrl.replace(/\/$/, '')}/runs/${input.runId}`
-  const blocks: unknown[] = [{ type: 'section', text: { type: 'mrkdwn', text: `*${text}*` } }]
+  const blocks: unknown[] = [{ type: 'section', text: { type: 'mrkdwn', text: `${text}` } }]
   const elements: unknown[] =
     input.phase === 'started'
       ? [
@@ -520,15 +520,48 @@ export async function uploadFileToThread(
   return complete.ok === true
 }
 
-/** Reply to a slash command's response_url (ephemeral by default). */
+/** Reply to a slash command's response_url (ephemeral by default).
+ *
+ *  `replaceOriginal` is only meaningful for interactivity (button) payloads,
+ *  where a reply can either post a new message or overwrite the message the
+ *  button lives in. Leave it undefined to send no `replace_original` field at
+ *  all and inherit Slack's per-surface default — which is what the slash
+ *  command paths rely on. */
 export async function respondUrl(
   responseUrl: string,
   text: string,
   ephemeral = true,
+  replaceOriginal?: boolean,
 ): Promise<void> {
   await fetch(responseUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ response_type: ephemeral ? 'ephemeral' : 'in_channel', text }),
+    body: JSON.stringify({
+      response_type: ephemeral ? 'ephemeral' : 'in_channel',
+      text,
+      ...(replaceOriginal === undefined ? {} : { replace_original: replaceOriginal }),
+    }),
   })
+}
+
+/**
+ * Post a new message visible only to `user` in `channel` (chat.postEphemeral).
+ *
+ * Preferred over `respondUrl` for button-click failures: it cannot modify the
+ * message the button lives in, whereas a response_url reply's effect on the
+ * original message depends on a Slack default that differs by surface. Needs
+ * only `chat:write`, which the app already has.
+ *
+ * Returns false if Slack rejected it (e.g. `user_not_in_channel`), so callers
+ * can fall back to the response_url.
+ */
+export async function postEphemeral(
+  botToken: string,
+  channel: string,
+  user: string,
+  text: string,
+  apiBase?: string,
+): Promise<boolean> {
+  const res = await slackApi(botToken, 'chat.postEphemeral', { channel, user, text }, apiBase)
+  return res.ok === true
 }

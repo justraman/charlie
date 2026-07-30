@@ -4,9 +4,32 @@ import {
   buildK6TableText,
   buildRunParentBlocks,
   parseSlackCommand,
+  postEphemeral,
+  respondUrl,
   runParentText,
   verifySlackSignature,
 } from '../worker/lib/slack'
+
+/** Swap in a fetch that records calls, and always restore the real one. */
+async function withFetch(
+  handler: (url: string, body: unknown) => Response,
+  fn: () => Promise<void>,
+): Promise<Array<{ url: string; body: any }>> {
+  const calls: Array<{ url: string; body: any }> = []
+  const real = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    calls.push({ url, body })
+    return handler(url, body)
+  }) as unknown as typeof fetch
+  try {
+    await fn()
+  } finally {
+    globalThis.fetch = real
+  }
+  return calls
+}
 
 async function sign(secret: string, ts: number, body: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -98,16 +121,16 @@ describe('parseSlackCommand', () => {
 
 describe('runParentText', () => {
   const base = { flowLabel: 'checkout', project: 'demo', environment: 'qa' }
-  test('started uses the hourglass and "Started flow"', () => {
+  test('started uses the hourglass and `Started flow`', () => {
     expect(runParentText({ ...base, phase: 'started' })).toBe(
-      '⏳ Started flow "checkout" on demo@qa',
+      '⏳ Started flow `checkout` on demo@qa',
     )
   })
   test('passed uses green check + Completed, failed uses red circle', () => {
     expect(runParentText({ ...base, phase: 'passed' })).toBe(
-      '✅ Completed flow "checkout" on demo@qa',
+      '✅ Completed flow `checkout` on demo@qa',
     )
-    expect(runParentText({ ...base, phase: 'failed' })).toBe('🔴 Failed flow "checkout" on demo@qa')
+    expect(runParentText({ ...base, phase: 'failed' })).toBe('🔴 Failed flow `checkout` on demo@qa')
   })
 })
 
@@ -224,5 +247,65 @@ describe('buildK6ReplyBlocks', () => {
     expect(texts).toContain('```') // fenced table
     expect(texts).toContain('📎')
     expect(texts).toContain('No previous run with the same settings')
+  })
+})
+
+describe('respondUrl', () => {
+  test('omits replace_original unless asked, so slash commands keep Slack defaults', async () => {
+    const calls = await withFetch(
+      () => new Response('ok', { status: 200 }),
+      async () => {
+        await respondUrl('https://hooks.slack/r/1', 'hello')
+      },
+    )
+    expect(calls[0]!.body.response_type).toBe('ephemeral')
+    expect('replace_original' in calls[0]!.body).toBe(false)
+  })
+
+  test('pins replace_original:false for a button reply that must not edit the original', async () => {
+    const calls = await withFetch(
+      () => new Response('ok', { status: 200 }),
+      async () => {
+        await respondUrl('https://hooks.slack/r/1', 'nope', true, false)
+      },
+    )
+    expect(calls[0]!.body).toMatchObject({
+      response_type: 'ephemeral',
+      text: 'nope',
+      replace_original: false,
+    })
+  })
+})
+
+describe('postEphemeral', () => {
+  test('posts chat.postEphemeral addressed to one user in the channel', async () => {
+    const calls = await withFetch(
+      () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+      async () => {
+        const sent = await postEphemeral(
+          'xoxb-1',
+          'C123',
+          'U456',
+          'no permission',
+          'https://api.test',
+        )
+        expect(sent).toBe(true)
+      },
+    )
+    expect(calls[0]!.url).toBe('https://api.test/chat.postEphemeral')
+    expect(calls[0]!.body).toMatchObject({ channel: 'C123', user: 'U456', text: 'no permission' })
+    // Nothing that could mutate the button's message.
+    expect('ts' in calls[0]!.body).toBe(false)
+    expect('replace_original' in calls[0]!.body).toBe(false)
+  })
+
+  test('returns false when Slack rejects it, so the caller can fall back', async () => {
+    await withFetch(
+      () =>
+        new Response(JSON.stringify({ ok: false, error: 'user_not_in_channel' }), { status: 200 }),
+      async () => {
+        expect(await postEphemeral('xoxb-1', 'C123', 'U456', 'x', 'https://api.test')).toBe(false)
+      },
+    )
   })
 })

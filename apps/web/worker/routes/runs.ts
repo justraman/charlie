@@ -5,7 +5,7 @@ import { createDb, type Db } from '../db/client'
 import { projects, reports, run_shards, runs as runsTable, shard_results } from '../db/schema'
 import type { AppBindings } from '../env'
 import { writeAudited } from '../lib/audit'
-import { githubConfigured } from '../lib/github'
+import { fetchJobLog, githubConfigured, listWorkflowJobs } from '../lib/github'
 import { clientIp, HttpError, userAgent } from '../lib/http'
 import { runRelativePath } from '../lib/report'
 import { createRun } from '../lib/run-create'
@@ -344,6 +344,63 @@ runs.get(
         'cache-control': 'private, max-age=300',
       },
     })
+  },
+)
+
+// --- GET /api/runs/:id/ci-logs — CI job list + per-step status ---------------
+// The compute plane's own view of the run. This is the only place a failure
+// *outside* `charlie execute` shows up (container/install/k6-download failures,
+// OOM, a job hitting the GitHub timeout) — cases where no shard result is ever
+// posted and the Coordinator can only report a dead-shard timeout.
+runs.get(
+  '/:id/ci-logs',
+  authenticate,
+  authorize({ capability: 'projects.view', scope: 'reports:read' }),
+  async (c) => {
+    const { orgId } = c.get('auth')
+    const db = createDb(c.env.DB)
+    const run = await loadRun(db, orgId, c.req.param('id'))
+    if (!githubConfigured(c.env))
+      return c.json({ available: false, reason: 'not-configured', jobs: [] })
+    if (!run.gha_run_id) {
+      // Either still queued, or dispatch resolution never matched a run id.
+      return c.json({ available: false, reason: 'no-workflow-run', jobs: [] })
+    }
+    try {
+      const jobs = await listWorkflowJobs(c.env, run.gha_run_id)
+      return c.json({ available: true, reason: null, ghaRunId: run.gha_run_id, jobs })
+    } catch (err) {
+      return c.json({
+        available: false,
+        reason: (err as Error).message.slice(0, 200),
+        jobs: [],
+      })
+    }
+  },
+)
+
+// --- GET /api/runs/:id/ci-logs/:jobId — plain-text log for one CI job --------
+runs.get(
+  '/:id/ci-logs/:jobId',
+  authenticate,
+  authorize({ capability: 'projects.view', scope: 'reports:read' }),
+  async (c) => {
+    const { orgId } = c.get('auth')
+    const db = createDb(c.env.DB)
+    const run = await loadRun(db, orgId, c.req.param('id'))
+    if (!githubConfigured(c.env) || !run.gha_run_id) {
+      throw new HttpError('not_found', 'No CI logs for this run')
+    }
+    // Authorization: a job id is a repo-wide identifier, so confirm this one
+    // belongs to *this* run's workflow run before returning its log.
+    const jobId = c.req.param('jobId')
+    const jobs = await listWorkflowJobs(c.env, run.gha_run_id)
+    if (!jobs.some((j) => j.id === jobId)) {
+      throw new HttpError('not_found', 'Job does not belong to this run')
+    }
+    const log = await fetchJobLog(c.env, jobId)
+    if (!log) return c.json({ text: null, truncated: false })
+    return c.json(log)
   },
 )
 

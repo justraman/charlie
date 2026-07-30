@@ -51,7 +51,7 @@ conversation instead of a scatter of standalone messages.
    parent message and captures its `ts` (persisted on `runs.slack_thread_ts`):
 
    ```
-   ⏳ Started flow "checkout" on checkout@qa   [ Track progress ]
+   ⏳ Started flow `checkout` on checkout@qa   [ Track progress ]
    ```
 
 2. **On completion**, the same parent message is **edited in place** — the
@@ -59,8 +59,8 @@ conversation instead of a scatter of standalone messages.
    from *Started* to *Completed* / *Failed*:
 
    ```
-   ✅ Completed flow "checkout" on checkout@qa   [ View report ]  [ Re-run ]
-   🔴 Failed flow "checkout" on checkout@qa      [ View report ]  [ Re-run ]
+   ✅ Completed flow `checkout` on checkout@qa   [ View report ]  [ Re-run ]
+   🔴 Failed flow `checkout` on checkout@qa      [ View report ]  [ Re-run ]
    ```
 
 3. **All results post as replies in that thread** — E2E summaries and k6 load
