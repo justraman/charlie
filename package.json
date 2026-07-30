@@ -6,6 +6,10 @@
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "bun@1.3.13",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "bun run --cwd apps/web dev",
     "build": "nx run @charlie/web:build",
