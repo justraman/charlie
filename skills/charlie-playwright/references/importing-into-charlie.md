@@ -62,8 +62,10 @@ Prefer grep tags over path filters when a logical group spans multiple files.
    and that tests navigate with **relative** paths (so `baseURL` applies).
 2. **Missing header?** The environment's default headers arrive as
    `CHARLIE_HEADERS`; make sure the config forwards them via `extraHTTPHeaders`.
-3. **Missing secret?** The `secret()` helper throws by name — the log names the
-   missing `CHARLIE_SECRET_<NAME>`. Add it to the environment in Charlie.
+3. **Missing secret?** The `secret()` helper throws by name. Add it to the
+   environment in Charlie, spelled exactly as the env var the test reads. If the
+   name is a reserved one, `log.txt` says it was skipped — read it as
+   `CHARLIE_SECRET_<NAME>` or rename the secret.
 4. **Committed `test.only`?** `forbidOnly` on CI fails the run. Remove it.
 5. **Open the trace.** Charlie uploads `retain-on-failure` traces to the run's
    artifacts; open them in the Playwright trace viewer to see the exact step.

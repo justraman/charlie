@@ -347,8 +347,9 @@ export function FlowEditorView() {
             <p className="text-muted-foreground text-sm">
               Charlie checks out this repo and runs <code>playwright test</code> against the
               selected environment. Your <code>playwright.config</code> should read{' '}
-              <code>process.env.CHARLIE_BASE_URL</code>; secrets arrive as{' '}
-              <code>CHARLIE_SECRET_&lt;NAME&gt;</code>. See the example repo in the docs.
+              <code>process.env.CHARLIE_BASE_URL</code>; each environment secret arrives under its
+              own name, so <code>process.env.&lt;NAME&gt;</code> works with no renaming. See the
+              example repo in the docs.
             </p>
 
             <div className="bg-muted/40 space-y-2 rounded-lg border p-3">

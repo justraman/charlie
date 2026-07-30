@@ -3,7 +3,8 @@ import { defineConfig, devices } from '@playwright/test'
 // Charlie's contract for `code` flows (see docs/CUSTOM_TESTS.md):
 //   CHARLIE_BASE_URL       the selected environment's base URL
 //   CHARLIE_HEADERS        JSON of the environment's default headers
-//   CHARLIE_SECRET_<NAME>  one variable per environment secret
+//   <NAME>                 each environment secret, under its own name
+//   CHARLIE_SECRET_<NAME>  the same secret, prefixed (for reserved names)
 //
 // When run locally (outside Charlie) these are unset, so we fall back to a local
 // dev server. Nothing here is Charlie-specific beyond reading these env vars —

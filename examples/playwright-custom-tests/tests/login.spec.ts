@@ -2,8 +2,9 @@ import { expect, test } from '@playwright/test'
 import { secret } from './charlie'
 
 // Demonstrates using an environment secret. In Charlie, add TEST_EMAIL and
-// TEST_PASSWORD as secrets on the environment; they arrive here as
-// CHARLIE_SECRET_TEST_EMAIL / CHARLIE_SECRET_TEST_PASSWORD.
+// TEST_PASSWORD as secrets on the environment; they arrive here under those
+// exact names, so `process.env.TEST_EMAIL` works too — `secret()` just adds a
+// clear error when one is missing.
 //
 // This is illustrative — adjust the selectors and route to your own app. Tag it
 // with @login so a Charlie code flow can select it via the "grep" filter.

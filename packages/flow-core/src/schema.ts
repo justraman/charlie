@@ -167,7 +167,8 @@ const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
 
 // The pointer a code flow stores: which repo, which ref, and how to select the
 // specs to run. The runner injects the target environment via env vars
-// (CHARLIE_BASE_URL, CHARLIE_SECRET_*) — the repo's playwright.config reads them.
+// (CHARLIE_BASE_URL, plus each secret under its own name) — the repo's
+// playwright.config reads them.
 export const codeSpecSchema = z.strictObject({
   /** GitHub "owner/repo" holding the Playwright project. */
   repo: z.string().regex(REPO_RE, 'must be "owner/repo"'),

@@ -1,6 +1,12 @@
-import { AlertCircleIcon, ArrowLeftIcon, DownloadIcon, ExternalLinkIcon } from 'lucide-react'
+import {
+  AlertCircleIcon,
+  ArrowLeftIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  RotateCcwIcon,
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
 import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -442,6 +448,7 @@ function ciStatus(job: CiJob): string {
 export function RunDetailView() {
   const { id: runId } = useParams<{ id: string }>()
   const { can } = useAuth()
+  const navigate = useNavigate()
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [liveStatus, setLiveStatus] = useState<string | null>(null)
   const [liveShards, setLiveShards] = useState<Record<number, string>>({})
@@ -450,7 +457,21 @@ export function RunDetailView() {
   const [log, setLog] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [ci, setCi] = useState<CiLogs | null>(null)
+  const [rerunning, setRerunning] = useState(false)
   const esRef = useRef<EventSource | null>(null)
+
+  // A rerun navigates to the new run's id while this component stays mounted,
+  // so clear the previous run's live state — otherwise its terminal status and
+  // shard log bleed into the new run until the first fetch lands. Keyed on
+  // runId alone so the SSE handler's loadDetail() never wipes the live log.
+  useEffect(() => {
+    setDetail(null)
+    setLiveStatus(null)
+    setLiveShards({})
+    setLog([])
+    setCi(null)
+    setError(null)
+  }, [runId])
 
   const loadDetail = useCallback(async () => {
     if (!runId) return
@@ -535,6 +556,22 @@ export function RunDetailView() {
     }
   }
 
+  // Queues a *new* run with this run's engine/profile/flows/environment and
+  // follows it, so the original stays intact as a record of the failure.
+  async function rerun() {
+    if (!runId || rerunning) return
+    setRerunning(true)
+    setError(null)
+    try {
+      const res = await api.post<{ runId: string }>(`/api/runs/${runId}/rerun`)
+      navigate(`/runs/${res.runId}`)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
+    } finally {
+      setRerunning(false)
+    }
+  }
+
   if (!detail) {
     return (
       <div className="space-y-6">
@@ -555,7 +592,10 @@ export function RunDetailView() {
     liveShards[index] ?? detail.shards.find((s) => s.index === index)?.status ?? 'pending'
   const labelOf = (index: number) =>
     shardLabel(detail.run.flowSelection, detail.run.expectedShards, index)
+  // Cancel while live, Rerun once finished — the two are mutually exclusive, so
+  // the header always offers exactly one action for the run's current state.
   const canCancel = can('runs.trigger') && !TERMINAL.includes(status)
+  const canRerun = can('runs.trigger') && TERMINAL.includes(status)
 
   return (
     <div className="space-y-6">
@@ -574,6 +614,12 @@ export function RunDetailView() {
         actions={
           <>
             <Badge className={statusBadge(status)}>{status}</Badge>
+            {canRerun && (
+              <Button type="button" variant="outline" onClick={rerun} disabled={rerunning}>
+                <RotateCcwIcon />
+                {rerunning ? 'Queueing…' : 'Rerun'}
+              </Button>
+            )}
             {canCancel && (
               <Button type="button" variant="destructive" onClick={cancel}>
                 Cancel

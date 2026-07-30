@@ -11,7 +11,23 @@ in once (config + a tiny helper) and every test inherits them.
 | `CHARLIE_BASE_URL` | The environment's `base_url`. | `use.baseURL` |
 | `PLAYWRIGHT_BASE_URL` | Same value, for configs that already read this name. | `use.baseURL` |
 | `CHARLIE_HEADERS` | JSON string of the environment's default headers. | `use.extraHTTPHeaders` |
-| `CHARLIE_SECRET_<NAME>` | One var per environment secret (`TEST_EMAIL` → `CHARLIE_SECRET_TEST_EMAIL`). | `secret('NAME')` |
+| `<NAME>` | Each environment secret, under its own name (`TEST_EMAIL` → `process.env.TEST_EMAIL`). | `secret('NAME')` |
+| `CHARLIE_SECRET_<NAME>` | The same secret, prefixed. Also set; the only form for a reserved name (below). | `secret('NAME')` |
+
+### Reserved secret names
+
+A secret is exported under its own name unless that would take over a variable
+Charlie sets or the run depends on. These reach the test **only** as
+`CHARLIE_SECRET_<NAME>`:
+
+`CHARLIE_BASE_URL`, `CHARLIE_HEADERS`, `CHARLIE_RUN_TOKEN`, `CHARLIE_REPORT_NAME`,
+`PLAYWRIGHT_BASE_URL`, `PLAYWRIGHT_JSON_OUTPUT_NAME`, `PATH`, `HOME`, `PWD`,
+`SHELL`, `TMPDIR`, `CI`, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`
+
+Same for a name that isn't a legal env var name (`[A-Za-z_][A-Za-z0-9_]*`). The
+run's `log.txt` names any secret it skipped, never its value. Prefer secret names
+that avoid this list entirely.
 
 When you run the repo locally these are unset, so fall back to a local dev
 server. That keeps the repo runnable on its own while staying Charlie-driven.
@@ -50,16 +66,22 @@ export default defineConfig({
 
 ## tests/charlie.ts — the secret helper
 
-Read secrets through this helper, not `process.env` directly, so a missing
-secret fails with a clear message instead of a confusing `undefined`.
+`process.env.TEST_EMAIL` works directly — Charlie exports secrets under their own
+names. Prefer this helper anyway: a missing secret then fails with a clear
+message instead of a confusing `undefined`, and it also covers the prefixed form
+used for reserved names.
 
 ```ts
+function read(name: string): string | undefined {
+  return process.env[name] || process.env[`CHARLIE_SECRET_${name}`] || undefined
+}
+
 export function secret(name: string): string {
-  const value = process.env[`CHARLIE_SECRET_${name}`]
+  const value = read(name)
   if (value === undefined || value === '') {
     throw new Error(
       `Missing secret "${name}". Add it to the environment in Charlie, or set ` +
-        `CHARLIE_SECRET_${name} locally to run this test outside Charlie.`,
+        `${name} locally to run this test outside Charlie.`,
     )
   }
   return value
@@ -67,7 +89,7 @@ export function secret(name: string): string {
 
 /** Optional secret — returns undefined instead of throwing. */
 export function optionalSecret(name: string): string | undefined {
-  return process.env[`CHARLIE_SECRET_${name}`] || undefined
+  return read(name)
 }
 ```
 
@@ -91,7 +113,7 @@ test('user can sign in @login', async ({ page }) => {
 - **Always relative navigation.** `page.goto('/checkout')`, never a full URL.
 - **Never hardcode secrets or headers.** The only source is the Charlie env.
 - **Name secrets in Charlie exactly** as the `<NAME>` you read (`TEST_EMAIL`,
-  not `test-email`). The env var is `CHARLIE_SECRET_` + that name verbatim.
+  not `test-email`). The env var *is* that name, verbatim.
 - **Secrets never leave the runner.** They're decrypted only on the compute
   plane and exist as env vars for the duration of the run — safe to use, never
   logged by Charlie, never sent to an AI provider.

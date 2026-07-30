@@ -85,7 +85,7 @@ failed run opens in exactly this viewer.
 
 ## Authentication pattern
 
-Reading `CHARLIE_SECRET_*` in every test is fine, but for suites that all need a
+Reading secrets in every test is fine, but for suites that all need a
 logged-in user, sign in once and reuse the storage state:
 
 ```ts

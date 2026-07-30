@@ -7,7 +7,8 @@
 //
 //   CHARLIE_BASE_URL          the environment's base_url
 //   CHARLIE_HEADERS           JSON of the environment's default headers
-//   CHARLIE_SECRET_<NAME>     one variable per environment secret
+//   <NAME>                    each environment secret, under its own name
+//   CHARLIE_SECRET_<NAME>     the same secret, prefixed (see injectSecrets)
 //
 // The repo's playwright.config.ts reads these (see examples/playwright-custom-tests).
 // We parse Playwright's JSON reporter to decide pass/fail and upload the report
@@ -151,6 +152,64 @@ function ensureCheckout(
   return dir
 }
 
+// Valid POSIX-ish env var name. A secret whose name doesn't match can't be
+// exported verbatim (the shell/spawn contract has no way to express it).
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+// Names a secret must not take over when exported under its own name: the vars
+// Charlie itself sets (a secret named CHARLIE_BASE_URL would silently retarget
+// the whole suite), plus the process/toolchain vars where an overwrite breaks
+// the run in a way that's very hard to debug from a test log — PATH above all.
+// Secret names are unvalidated at the API boundary (`z.record(z.string(),
+// z.string())`), so this list is what keeps verbatim export predictable.
+export const RESERVED_ENV_NAMES = new Set([
+  // Charlie's own contract, plus the run-scoped callback token.
+  'CHARLIE_BASE_URL',
+  'CHARLIE_HEADERS',
+  'CHARLIE_RUN_TOKEN',
+  'CHARLIE_REPORT_NAME',
+  'PLAYWRIGHT_BASE_URL',
+  'PLAYWRIGHT_JSON_OUTPUT_NAME',
+  // Process basics.
+  'PATH',
+  'HOME',
+  'PWD',
+  'SHELL',
+  'TMPDIR',
+  'CI',
+  // Interpreter and dynamic-loader hooks.
+  'NODE_OPTIONS',
+  'NODE_EXTRA_CA_CERTS',
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+  'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH',
+])
+
+/**
+ * Export each environment secret into `env` under its own name, so a repo that
+ * already reads `process.env.TEST_EMAIL` runs here unchanged — Charlie does not
+ * rename it. Every secret is *additionally* exported as `CHARLIE_SECRET_<NAME>`,
+ * which stays the way to reach one whose own name is reserved or isn't a legal
+ * env var name.
+ *
+ * Returns the names that could not be exported verbatim, so the caller can say
+ * so in the run log. Values are never logged.
+ */
+export function injectSecrets(env: Env, secrets: Record<string, string>): string[] {
+  const skipped: string[] = []
+  for (const [name, value] of Object.entries(secrets)) {
+    // The prefixed form is always set, including for skipped names.
+    env[`CHARLIE_SECRET_${name}`] = value
+    if (!ENV_NAME_RE.test(name) || RESERVED_ENV_NAMES.has(name)) {
+      skipped.push(name)
+      continue
+    }
+    env[name] = value
+  }
+  return skipped
+}
+
 /** Pick an install command from the lockfile present in the project dir. */
 function detectInstall(projectDir: string): string[] {
   const has = (f: string) => existsSync(join(projectDir, f))
@@ -231,8 +290,13 @@ export async function runCodeFlow(opts: {
     PLAYWRIGHT_BASE_URL: bundle.environment.baseUrl,
     CHARLIE_HEADERS: JSON.stringify(bundle.environment.headers ?? {}),
   }
-  for (const [name, value] of Object.entries(bundle.environment.secrets ?? {})) {
-    env[`CHARLIE_SECRET_${name}`] = value
+  const skipped = injectSecrets(env, bundle.environment.secrets ?? {})
+  if (skipped.length > 0) {
+    log.push(
+      `  note: ${skipped.length} secret(s) kept out of the process env under their own name ` +
+        `(reserved, or not a valid env var name): ${skipped.join(', ')}`,
+      '  read those as CHARLIE_SECRET_<NAME> instead.',
+    )
   }
 
   try {

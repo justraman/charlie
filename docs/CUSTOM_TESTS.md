@@ -68,8 +68,25 @@ vars** — there is no Charlie SDK to install:
 |---|---|
 | `CHARLIE_BASE_URL` | The environment's `base_url`. Point Playwright's `baseURL` at it so relative `page.goto()` calls resolve. |
 | `CHARLIE_HEADERS` | JSON of the environment's default headers; forward via `extraHTTPHeaders`. |
-| `CHARLIE_SECRET_<NAME>` | One variable per environment secret (e.g. secret `TEST_EMAIL` → `CHARLIE_SECRET_TEST_EMAIL`). |
+| `<NAME>` | **Each environment secret, under its own name** — secret `TEST_EMAIL` arrives as `process.env.TEST_EMAIL`. Charlie does not rename it, so a repo that already reads its own env vars runs here unchanged. |
+| `CHARLIE_SECRET_<NAME>` | The same secret, prefixed. Always set; it's how you reach a secret whose own name is reserved (below). |
 | `PLAYWRIGHT_BASE_URL` | Same value as `CHARLIE_BASE_URL`, for configs that already read this. |
+
+### Reserved secret names
+
+A secret is exported under its own name unless that name would take over a
+variable Charlie sets or one the run depends on. These are exported **only** in
+the `CHARLIE_SECRET_<NAME>` form:
+
+`CHARLIE_BASE_URL`, `CHARLIE_HEADERS`, `CHARLIE_RUN_TOKEN`, `CHARLIE_REPORT_NAME`,
+`PLAYWRIGHT_BASE_URL`, `PLAYWRIGHT_JSON_OUTPUT_NAME`, `PATH`, `HOME`, `PWD`,
+`SHELL`, `TMPDIR`, `CI`, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`, `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`
+
+The same applies to a name that isn't a legal env var name (must match
+`[A-Za-z_][A-Za-z0-9_]*`). Either way the run's `log.txt` names the secrets it
+skipped — never their values — so a missing variable is self-explaining rather
+than a mystery failure.
 
 A minimal `playwright.config.ts`:
 
@@ -84,6 +101,12 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 })
+```
+
+And a secret is read like any other env var:
+
+```ts
+await page.getByLabel(/email/i).fill(process.env.TEST_EMAIL!)
 ```
 
 **Secrets are never sent to any third party.** They are decrypted only on the

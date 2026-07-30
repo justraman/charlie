@@ -21,7 +21,7 @@ existing one), install the Charlie GitHub App on it, and import it in Charlie.
 ```
 playwright.config.ts   # reads CHARLIE_BASE_URL / CHARLIE_HEADERS
 tests/
-  charlie.ts           # secret() helper for CHARLIE_SECRET_* vars
+  charlie.ts           # optional secret() helper — clear error when one is missing
   homepage.spec.ts     # baseURL-relative navigation, tagged @smoke
   login.spec.ts        # uses environment secrets, tagged @login
 ```
@@ -35,7 +35,12 @@ Nothing here is a special Charlie SDK — it's ordinary `process.env`:
 |---|---|
 | `CHARLIE_BASE_URL` | The environment's base URL. Set as Playwright's `baseURL`, so `page.goto('/cart')` hits the right host. |
 | `CHARLIE_HEADERS` | JSON of the environment's default headers (auth, feature flags). Forwarded via `extraHTTPHeaders`. |
-| `CHARLIE_SECRET_<NAME>` | One variable per environment secret. Read with `secret('NAME')` from `tests/charlie.ts`. Secrets are decrypted only on the compute plane and never sent to any third party. |
+| `<NAME>` | Each environment secret, under its own name — secret `TEST_EMAIL` is just `process.env.TEST_EMAIL`. Secrets are decrypted only on the compute plane and never sent to any third party. |
+| `CHARLIE_SECRET_<NAME>` | The same secret, prefixed. Set as well, so a secret whose own name is reserved (`PATH`, `CI`, `CHARLIE_*`, … — see [docs](../../docs/CUSTOM_TESTS.md#reserved-secret-names)) is still reachable. |
+
+The `secret('NAME')` helper in `tests/charlie.ts` reads either form and throws a
+clear error when a required secret is missing — but plain `process.env.NAME`
+works, which is the point: no renaming to import an existing suite.
 
 `playwright.config.ts` shows how to consume them. When these are unset (running
 locally), it falls back to `http://localhost:3000` so the repo still works on its own.
@@ -48,8 +53,8 @@ npx playwright install chromium
 
 # Point at any environment and provide any secrets your tests read:
 CHARLIE_BASE_URL=https://staging.example.com \
-CHARLIE_SECRET_TEST_EMAIL=qa@example.com \
-CHARLIE_SECRET_TEST_PASSWORD=hunter2 \
+TEST_EMAIL=qa@example.com \
+TEST_PASSWORD=hunter2 \
   npm test
 ```
 

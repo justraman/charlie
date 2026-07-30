@@ -31,7 +31,7 @@ a header. Charlie injects the target environment at run time:
 |---|---|
 | `CHARLIE_BASE_URL` | Playwright's `baseURL` — so `page.goto('/cart')` resolves against whatever env (dev/qa/staging/prod) the run targets. `PLAYWRIGHT_BASE_URL` is set to the same value. |
 | `CHARLIE_HEADERS` | JSON of the environment's default headers (auth, feature flags). Parse and pass to `extraHTTPHeaders`. |
-| `CHARLIE_SECRET_<NAME>` | One variable per environment secret. Secret `TEST_EMAIL` → `CHARLIE_SECRET_TEST_EMAIL`. Decrypted only on the runner; never sent to any third party. |
+| `<NAME>` | Each environment secret, under its own name — secret `TEST_EMAIL` is `process.env.TEST_EMAIL`. Charlie does not rename it. Decrypted only on the runner; never sent to any third party. |
 
 A test that hardcodes `https://staging.example.com` or an inline password will
 pass in one place and fail everywhere else. A test that reads the contract runs
@@ -70,8 +70,8 @@ Follow these steps in order. Load the referenced file when you reach that step.
    ```bash
    npm install && npx playwright install chromium
    CHARLIE_BASE_URL=https://staging.example.com \
-   CHARLIE_SECRET_TEST_EMAIL=qa@example.com \
-   CHARLIE_SECRET_TEST_PASSWORD=hunter2 \
+   TEST_EMAIL=qa@example.com \
+   TEST_PASSWORD=hunter2 \
      npx playwright test
    ```
 
@@ -97,7 +97,7 @@ top-level errors. Practical consequences:
 ## Common mistakes this skill prevents
 
 - Hardcoding the base URL instead of using `baseURL` from `CHARLIE_BASE_URL`.
-- Putting credentials in the repo instead of reading `CHARLIE_SECRET_*`.
+- Putting credentials in the repo instead of reading them from the environment.
 - Forgetting `extraHTTPHeaders`, so auth/feature-flag headers are dropped and
   tests 401/404 only inside Charlie.
 - Adding `page.waitForTimeout(...)` instead of web-first assertions — flaky in CI.

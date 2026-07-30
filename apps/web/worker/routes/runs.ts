@@ -489,4 +489,57 @@ runs.post('/:id/cancel', authenticate, authorize({ capability: 'runs.trigger' })
   return c.json({ ok: true })
 })
 
+// --- POST /api/runs/:id/rerun -----------------------------------------------
+// Re-runs an existing run by creating a *new* run with the same selection, the
+// same path the Slack "Re-run" button takes (see rerunFromSlack in slack.ts).
+// It deliberately does not re-dispatch the original GitHub workflow run: the
+// Coordinator DO has already closed a terminal run, so callbacks.ts would
+// reject the replayed shard results and the original's report would never
+// update. A fresh run keeps one run row per attempt, which the report and
+// load-comparison history both assume.
+runs.post(
+  '/:id/rerun',
+  authenticate,
+  authorize({ capability: 'runs.trigger', scope: 'runs:write' }),
+  async (c) => {
+    const actor = c.get('auth')
+    const db = createDb(c.env.DB)
+    const original = await loadRun(db, actor.orgId, c.req.param('id'))
+
+    // Names, not ids: createRun re-resolves them so the rerun picks up each
+    // flow's *current* version — the point of re-running after a fix.
+    const flowNames = (JSON.parse(original.flow_selection) as { name: string }[]).map((f) => f.name)
+
+    const result = await createRun(c.env, {
+      orgId: actor.orgId,
+      project: original.project_id,
+      environment: original.environment_id,
+      engine: original.engine as 'playwright' | 'k6',
+      profile: original.profile,
+      flows: flowNames,
+      trigger: actor.actorKind === 'api_key' ? 'ci' : 'manual',
+      triggeredBy: actor.actorKind === 'user' ? actor.actorId : null,
+      // Carry the commit through so a rerun of a merge-triggered run still
+      // reports against the commit it was testing.
+      commitSha: original.commit_sha,
+      actorId: actor.actorId,
+      actorKind: actor.actorKind,
+      ip: clientIp(c),
+      userAgent: userAgent(c),
+    })
+
+    return c.json(
+      {
+        runId: result.runId,
+        status: result.status,
+        engine: result.engine,
+        expectedShards: result.expectedShards,
+        dispatch: result.dispatch,
+        rerunOf: original.id,
+      },
+      202,
+    )
+  },
+)
+
 export default runs
