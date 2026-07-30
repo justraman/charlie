@@ -42,6 +42,13 @@ jobs:
       matrix:
         shard: ${{ fromJson(needs.prepare.outputs.matrix) }}
     runs-on: ubuntu-latest
+    # `code` flows shell out to whichever package manager the user's repo uses,
+    # so corepack must never block on a download prompt (non-interactive job) and
+    # must not refuse a manager that differs from the repo's `packageManager` pin
+    # (our lockfile detection picks the manager, not that field).
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      COREPACK_ENABLE_STRICT: "0"
     steps:
       - uses: actions/checkout@v4
       - name: Install unzip + git
@@ -50,6 +57,20 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.13
+      # A `code` flow installs the user's repo with the package manager implied by
+      # its lockfile (detectInstall in packages/runner/src/playwright-project.ts):
+      # bun, pnpm, yarn or npm. The Playwright image ships only node/npm, so a
+      # pnpm-lock.yaml repo failed with `Executable not found in $PATH: "pnpm"`.
+      # Prefer corepack — it honours a repo's own `packageManager` version pin —
+      # and fall back to a global npm install if corepack is unavailable.
+      - name: Install package managers (pnpm, yarn)
+        run: |
+          corepack enable pnpm yarn || echo "corepack enable failed; falling back to npm -g"
+          # --force lets the fallback overwrite a corepack shim that enabled but
+          # then couldn't fetch its managed version.
+          pnpm --version || npm install -g --force --no-audit --no-fund pnpm
+          yarn --version || npm install -g --force --no-audit --no-fund yarn
+          echo "node $(node --version) | npm $(npm --version) | bun $(bun --version) | pnpm $(pnpm --version) | yarn $(yarn --version)"
       - run: bun install --frozen-lockfile
       # Load runs need the k6 binary on PATH; the runner esbuild-bundles the
       # scenario and spawns `k6 run`. (E2E runs use Playwright from the image.)
